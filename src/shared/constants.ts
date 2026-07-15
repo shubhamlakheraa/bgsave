@@ -4,9 +4,13 @@ export const APP_VERSION = '0.1.0';
 export const STORAGE_KEYS = {
   PROFILE_INDEX: 'profileIndex',
   PROFILE_PREFIX: 'profile:',
+  CORRUPTED_PREFIX: '__corrupted:',
   LAST_SESSION_ID: '__last_session__',
   SETTINGS: 'settings',
 } as const;
+
+export const profileKey = (id: string) => `${STORAGE_KEYS.PROFILE_PREFIX}${id}`;
+export const corruptedKey = (id: string) => `${STORAGE_KEYS.CORRUPTED_PREFIX}${id}`;
 
 export const MESSAGES = {
   PING: 'PING',
