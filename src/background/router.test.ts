@@ -1,0 +1,182 @@
+import { describe, it, expect, beforeEach } from 'vitest';
+import { makeMessageHandler } from './router';
+import { WriteQueue } from './writeQueue';
+import { ProfileStore } from '../shared/storage';
+import { MemoryKVStore } from '../shared/kvStore';
+import { SCHEMA_VERSION } from '../shared/constants';
+import type { Profile } from '../shared/types';
+import type { TabFetcher } from './freeze';
+
+let store: ProfileStore;
+let queue: WriteQueue;
+let handle: ReturnType<typeof makeMessageHandler>;
+let idCounter: number;
+
+const stubTabFetcher: TabFetcher = {
+  queryCurrentWindow: async () => [
+    { url: 'https://a.com', title: 'A', index: 0, windowId: 1 },
+  ],
+  getTabs: async (ids) =>
+    ids.map((id) => ({
+      url: `https://${id}.com`,
+      title: `T${id}`,
+      index: 0,
+      windowId: 1,
+    })),
+  getLastFocusedWindowId: async () => 1,
+};
+
+beforeEach(() => {
+  store = new ProfileStore(new MemoryKVStore());
+  queue = new WriteQueue();
+  idCounter = 0;
+  handle = makeMessageHandler({
+    store,
+    queue,
+    tabs: stubTabFetcher,
+    now: () => 1_700_000_000_000,
+    newId: () => `id-${++idCounter}`,
+  });
+});
+
+const buildProfile = (id: string, name: string): Profile => ({
+  id,
+  name,
+  schemaVersion: SCHEMA_VERSION,
+  createdAt: 0,
+  updatedAt: 0,
+  windows: [
+    {
+      focused: true,
+      tabs: [
+        {
+          url: 'https://example.com',
+          title: 'Example',
+          pinned: false,
+          groupId: -1,
+          index: 0,
+          restricted: false,
+          capturedAt: Date.now(),
+        },
+      ],
+    },
+  ],
+});
+
+describe('router — read messages', () => {
+  it('PING returns PONG', async () => {
+    const res = await handle({ type: 'PING' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.type).toBe('PONG');
+      expect(typeof res.data.at).toBe('number');
+    }
+  });
+
+  it('LIST_PROFILES returns [] when empty', async () => {
+    const res = await handle({ type: 'LIST_PROFILES' });
+    expect(res).toEqual({ ok: true, data: [] });
+  });
+
+  it('GET_PROFILE returns null for a missing id', async () => {
+    const res = await handle({ type: 'GET_PROFILE', id: 'nope' });
+    expect(res).toEqual({ ok: true, data: null });
+  });
+
+  it('VALIDATE_NAME rejects empty names', async () => {
+    const res = await handle({ type: 'VALIDATE_NAME', name: '' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.ok).toBe(false);
+  });
+});
+
+describe('router — write messages', () => {
+  it('SAVE_PROFILE then LIST_PROFILES roundtrips', async () => {
+    const p = buildProfile('a', 'Auth');
+    const saveRes = await handle({ type: 'SAVE_PROFILE', profile: p });
+    expect(saveRes.ok).toBe(true);
+
+    const listRes = await handle({ type: 'LIST_PROFILES' });
+    if (listRes.ok) {
+      expect(listRes.data).toHaveLength(1);
+      expect(listRes.data[0].name).toBe('Auth');
+    }
+  });
+
+  it('SAVE_PROFILE returns an error envelope on duplicate names', async () => {
+    await handle({ type: 'SAVE_PROFILE', profile: buildProfile('a', 'X') });
+    const res = await handle({ type: 'SAVE_PROFILE', profile: buildProfile('b', 'X') });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/already exists/i);
+  });
+
+  it('DELETE_PROFILE removes from list', async () => {
+    await handle({ type: 'SAVE_PROFILE', profile: buildProfile('a', 'Auth') });
+    await handle({ type: 'DELETE_PROFILE', id: 'a' });
+    const list = await handle({ type: 'LIST_PROFILES' });
+    if (list.ok) expect(list.data).toEqual([]);
+  });
+
+  it('RENAME_PROFILE updates the name', async () => {
+    await handle({ type: 'SAVE_PROFILE', profile: buildProfile('a', 'Old') });
+    await handle({ type: 'RENAME_PROFILE', id: 'a', newName: 'New' });
+    const got = await handle({ type: 'GET_PROFILE', id: 'a' });
+    if (got.ok) expect(got.data?.name).toBe('New');
+  });
+});
+
+describe('router — FREEZE_WORKSPACE', () => {
+  it('freezes the current window and returns the new index entry', async () => {
+    const res = await handle({ type: 'FREEZE_WORKSPACE', name: 'Fresh' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data).toMatchObject({
+        id: 'id-1',
+        name: 'Fresh',
+        tabCount: 1,
+      });
+    }
+
+    const list = await handle({ type: 'LIST_PROFILES' });
+    if (list.ok) expect(list.data).toHaveLength(1);
+  });
+
+  it('freezes with a subset of tabIds', async () => {
+    const res = await handle({
+      type: 'FREEZE_WORKSPACE',
+      name: 'Picked',
+      tabIds: [7, 8, 9],
+    });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.tabCount).toBe(3);
+  });
+
+  it('returns an error envelope on duplicate freeze names', async () => {
+    await handle({ type: 'FREEZE_WORKSPACE', name: 'Dup' });
+    const res = await handle({ type: 'FREEZE_WORKSPACE', name: 'Dup' });
+    expect(res.ok).toBe(false);
+    if (!res.ok) expect(res.error).toMatch(/already exists/i);
+  });
+});
+
+describe('router — queue serialization', () => {
+  it('rapid-fire SAVE_PROFILE for different ids all land', async () => {
+    const saves = Array.from({ length: 8 }, (_, i) =>
+      handle({
+        type: 'SAVE_PROFILE',
+        profile: buildProfile(`id-${i}`, `Profile-${i}`),
+      }),
+    );
+    const results = await Promise.all(saves);
+    for (const r of results) expect(r.ok).toBe(true);
+
+    const list = await handle({ type: 'LIST_PROFILES' });
+    if (list.ok) {
+      expect(list.data).toHaveLength(8);
+      const names = list.data.map((e) => e.name).sort();
+      expect(names).toEqual(
+        Array.from({ length: 8 }, (_, i) => `Profile-${i}`).sort(),
+      );
+    }
+  });
+});
