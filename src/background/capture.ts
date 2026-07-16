@@ -58,17 +58,22 @@ export interface TabLike {
   index: number;
   windowId?: number;
   id?: number;
+  // Cognitive state, pre-captured by the content script during freeze. When
+  // null/undefined the SavedTab is metadata-only (restricted URL, timeout,
+  // or content script failure).
+  capturedState?: { scrollY: number; anchorText: string } | null;
 }
 
 /**
  * Convert one Chrome tab into a SavedTab. Handles loading tabs (pendingUrl
  * fallback), untitled tabs (empty string), ungrouped tabs (groupId -1),
- * and restricted URLs.
+ * and restricted URLs. When `capturedState` is present, scrollY/anchorText
+ * are copied through; otherwise they're omitted.
  */
 export function captureTab(tab: TabLike, now: number = Date.now()): SavedTab {
   const url = tab.url ?? tab.pendingUrl ?? '';
   const title = truncate(tab.title ?? '', LIMITS.TITLE_MAX);
-  return {
+  const saved: SavedTab = {
     url,
     title,
     pinned: tab.pinned ?? false,
@@ -77,6 +82,15 @@ export function captureTab(tab: TabLike, now: number = Date.now()): SavedTab {
     restricted: isRestrictedUrl(url),
     capturedAt: now,
   };
+  if (tab.capturedState) {
+    saved.scrollY = tab.capturedState.scrollY;
+    // Empty anchor is a signal from the content script that no anchor was
+    // found — don't persist an empty string, which would just be noise.
+    if (tab.capturedState.anchorText.length > 0) {
+      saved.anchorText = tab.capturedState.anchorText;
+    }
+  }
+  return saved;
 }
 
 /**

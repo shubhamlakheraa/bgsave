@@ -5,7 +5,7 @@ import { ProfileStore } from '../shared/storage';
 import { MemoryKVStore } from '../shared/kvStore';
 import { SCHEMA_VERSION } from '../shared/constants';
 import type { Profile } from '../shared/types';
-import type { TabFetcher } from './freeze';
+import type { TabFetcher, TabMessenger } from './freeze';
 
 let store: ProfileStore;
 let queue: WriteQueue;
@@ -26,6 +26,10 @@ const stubTabFetcher: TabFetcher = {
   getLastFocusedWindowId: async () => 1,
 };
 
+const stubMessenger: TabMessenger = {
+  requestState: async () => null,
+};
+
 beforeEach(() => {
   store = new ProfileStore(new MemoryKVStore());
   queue = new WriteQueue();
@@ -34,6 +38,7 @@ beforeEach(() => {
     store,
     queue,
     tabs: stubTabFetcher,
+    messenger: stubMessenger,
     now: () => 1_700_000_000_000,
     newId: () => `id-${++idCounter}`,
   });
