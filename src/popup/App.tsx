@@ -2,10 +2,21 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_NAME } from '../shared/constants';
 import { sendToBackground } from '../shared/messaging';
 import { formatRelativeTime } from '../shared/time';
+import { isRestrictedUrl } from '../background/capture';
 import type { ProfileIndexEntry } from '../shared/types';
 
 type ConnStatus = 'pending' | 'connected' | 'disconnected';
-type Mode = 'list' | 'naming' | 'saving';
+type Mode = 'list' | 'freezing' | 'saving';
+
+interface TabRow {
+  id: number;
+  title: string;
+  url: string;
+  host: string;
+  favIconUrl?: string;
+  restricted: boolean;
+  pinned: boolean;
+}
 
 export function App() {
   const [profiles, setProfiles] = useState<ProfileIndexEntry[] | null>(null);
@@ -16,7 +27,6 @@ export function App() {
   const refresh = useCallback(async () => {
     try {
       const list = await sendToBackground({ type: 'LIST_PROFILES' });
-      // Newest-first — the index doesn't guarantee order.
       list.sort((a, b) => b.updatedAt - a.updatedAt);
       setProfiles(list);
     } catch (err) {
@@ -44,16 +54,16 @@ export function App() {
   }, [refresh]);
 
   const handleFreeze = useCallback(
-    async (name: string) => {
+    async (name: string, tabIds: number[]) => {
       setMode('saving');
       setError(null);
       try {
-        await sendToBackground({ type: 'FREEZE_WORKSPACE', name });
+        await sendToBackground({ type: 'FREEZE_WORKSPACE', name, tabIds });
         await refresh();
         setMode('list');
       } catch (err) {
         setError(err instanceof Error ? err.message : String(err));
-        setMode('naming');
+        setMode('freezing');
       }
     },
     [refresh],
@@ -69,7 +79,7 @@ export function App() {
             className="popup__freeze"
             onClick={() => {
               setError(null);
-              setMode('naming');
+              setMode('freezing');
             }}
             disabled={conn !== 'connected'}
           >
@@ -78,8 +88,8 @@ export function App() {
         )}
       </header>
 
-      {(mode === 'naming' || mode === 'saving') && (
-        <NameForm
+      {(mode === 'freezing' || mode === 'saving') && (
+        <FreezeForm
           disabled={mode === 'saving'}
           existingNames={profiles?.map((p) => p.name) ?? []}
           onCancel={() => {
@@ -132,7 +142,15 @@ function ProfileList({ profiles }: { profiles: ProfileIndexEntry[] | null }) {
   );
 }
 
-function NameForm({
+function hostOf(url: string): string {
+  try {
+    return new URL(url).host || url;
+  } catch {
+    return url;
+  }
+}
+
+function FreezeForm({
   disabled,
   existingNames,
   onCancel,
@@ -141,18 +159,54 @@ function NameForm({
   disabled: boolean;
   existingNames: string[];
   onCancel: () => void;
-  onSubmit: (name: string) => void;
+  onSubmit: (name: string, tabIds: number[]) => void;
 }) {
-  const [value, setValue] = useState('');
+  const [name, setName] = useState('');
+  const [tabs, setTabs] = useState<TabRow[] | null>(null);
+  const [selected, setSelected] = useState<Set<number>>(new Set());
   const [localError, setLocalError] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
 
   useEffect(() => {
     inputRef.current?.focus();
+    (async () => {
+      const raw = await chrome.tabs.query({ currentWindow: true });
+      const rows: TabRow[] = raw
+        .filter((t): t is chrome.tabs.Tab & { id: number } => typeof t.id === 'number')
+        .map((t) => {
+          const url = t.url ?? t.pendingUrl ?? '';
+          return {
+            id: t.id,
+            title: t.title ?? '(untitled)',
+            url,
+            host: hostOf(url),
+            favIconUrl: t.favIconUrl,
+            restricted: isRestrictedUrl(url),
+            pinned: t.pinned ?? false,
+          };
+        });
+      setTabs(rows);
+      setSelected(new Set(rows.map((r) => r.id)));
+    })();
   }, []);
 
+  const toggle = (id: number) => {
+    setSelected((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+    if (localError) setLocalError(null);
+  };
+
+  const toggleAll = () => {
+    if (!tabs) return;
+    setSelected((prev) => (prev.size === tabs.length ? new Set() : new Set(tabs.map((t) => t.id))));
+  };
+
   const submit = () => {
-    const trimmed = value.trim();
+    const trimmed = name.trim();
     if (!trimmed) {
       setLocalError('Name cannot be empty.');
       return;
@@ -166,9 +220,15 @@ function NameForm({
       setLocalError('A workspace with this name already exists.');
       return;
     }
+    if (selected.size === 0) {
+      setLocalError('Select at least one tab.');
+      return;
+    }
     setLocalError(null);
-    onSubmit(trimmed);
+    onSubmit(trimmed, Array.from(selected));
   };
+
+  const allChecked = tabs !== null && selected.size === tabs.length;
 
   return (
     <form
@@ -183,11 +243,11 @@ function NameForm({
         type="text"
         className="popup__input"
         placeholder="Workspace name"
-        value={value}
+        value={name}
         maxLength={60}
         disabled={disabled}
         onChange={(e) => {
-          setValue(e.target.value);
+          setName(e.target.value);
           if (localError) setLocalError(null);
         }}
         onKeyDown={(e) => {
@@ -197,6 +257,52 @@ function NameForm({
           }
         }}
       />
+
+      {tabs === null ? (
+        <p className="popup__hint">Loading tabs…</p>
+      ) : (
+        <>
+          <div className="popup__picker-header">
+            <button
+              type="button"
+              className="popup__link"
+              onClick={toggleAll}
+              disabled={disabled}
+            >
+              {allChecked ? 'Deselect all' : 'Select all'}
+            </button>
+            <span className="popup__picker-count">
+              {selected.size} / {tabs.length} selected
+            </span>
+          </div>
+          <ul className="popup__picker">
+            {tabs.map((t) => (
+              <li key={t.id} className="popup__picker-row">
+                <label className="popup__picker-label">
+                  <input
+                    type="checkbox"
+                    checked={selected.has(t.id)}
+                    onChange={() => toggle(t.id)}
+                    disabled={disabled}
+                  />
+                  {t.favIconUrl ? (
+                    <img className="popup__picker-icon" src={t.favIconUrl} alt="" />
+                  ) : (
+                    <span className="popup__picker-icon popup__picker-icon--blank" />
+                  )}
+                  <span className="popup__picker-title" title={t.title}>
+                    {t.title}
+                  </span>
+                  <span className="popup__picker-host" title={t.url}>
+                    {t.restricted ? 'metadata only' : t.host}
+                  </span>
+                </label>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+
       <div className="popup__form-actions">
         <button type="button" className="popup__btn" onClick={onCancel} disabled={disabled}>
           Cancel
