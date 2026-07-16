@@ -1,3 +1,4 @@
+import type { HighlightStore } from '../shared/highlightStore';
 import type { ProfileStore } from '../shared/storage';
 import type {
   Envelope,
@@ -22,6 +23,7 @@ export interface HandlerDeps {
   queue: WriteQueue;
   tabs: TabFetcher;
   messenger: TabMessenger;
+  highlights: HighlightStore;
   now: () => number;
   newId: () => string;
 }
@@ -34,7 +36,7 @@ export interface HandlerDeps {
  * message boundary. Thrown errors become {ok: false, error}.
  */
 export function makeMessageHandler(deps: HandlerDeps) {
-  const { store, queue, tabs, messenger, now, newId } = deps;
+  const { store, queue, tabs, messenger, highlights, now, newId } = deps;
 
   const run = async (msg: Message): Promise<ResponseData<MessageType>> => {
     switch (msg.type) {
@@ -57,7 +59,7 @@ export function makeMessageHandler(deps: HandlerDeps) {
         return null;
       case 'FREEZE_WORKSPACE':
         return freezeWorkspace(
-          { store, tabs, messenger, now, newId },
+          { store, tabs, messenger, highlights, now, newId },
           { name: msg.name, tabIds: msg.tabIds },
         );
       default: {

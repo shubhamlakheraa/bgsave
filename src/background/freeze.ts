@@ -1,5 +1,6 @@
 import { LIMITS } from '../shared/constants';
 import type { CapturedState } from '../shared/contentMessaging';
+import type { HighlightStore } from '../shared/highlightStore';
 import type { ProfileIndexEntry } from '../shared/types';
 import type { ProfileStore } from '../shared/storage';
 import { withTimeout } from '../shared/withTimeout';
@@ -66,6 +67,10 @@ export interface FreezeDeps {
   store: ProfileStore;
   tabs: TabFetcher;
   messenger: TabMessenger;
+  // Read persisted per-URL highlights when bundling them into the profile.
+  // Independent of the content-script capture path — highlights are
+  // authoritative in storage, not in the live DOM.
+  highlights: HighlightStore;
   // Injectable for deterministic tests. Default to Date.now() / randomUUID()
   // in production wiring.
   now: () => number;
@@ -101,15 +106,23 @@ export async function freezeWorkspace(
     throw new Error('No tabs selected to freeze.');
   }
 
-  // Capture state for non-restricted tabs in parallel. Each capture races
-  // against LIMITS.CAPTURE_TIMEOUT_MS inside the messenger, so total wall
-  // time is bounded by the slowest tab, not the sum.
+  // Capture state and load highlights for non-restricted tabs in parallel.
+  // Each state capture races against LIMITS.CAPTURE_TIMEOUT_MS inside the
+  // messenger, so total wall time is bounded by the slowest tab, not the sum.
+  // Highlight fetches are direct storage reads and don't need a timeout —
+  // they're bounded by chrome.storage's own latency.
   const enriched: TabLike[] = await Promise.all(
     rawTabs.map(async (tab) => {
       const url = tab.url ?? tab.pendingUrl ?? '';
       if (tab.id === undefined || isRestrictedUrl(url)) return tab;
-      const state = await deps.messenger.requestState(tab.id);
-      return state ? { ...tab, capturedState: state } : tab;
+      const [state, highlights] = await Promise.all([
+        deps.messenger.requestState(tab.id),
+        deps.highlights.getHighlights(url).catch(() => []),
+      ]);
+      const next: TabLike = { ...tab };
+      if (state) next.capturedState = state;
+      if (highlights.length > 0) next.highlights = highlights;
+      return next;
     }),
   );
 
