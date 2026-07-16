@@ -2,6 +2,7 @@ import { describe, it, expect, beforeEach } from 'vitest';
 import { makeMessageHandler } from './router';
 import { WriteQueue } from './writeQueue';
 import { ProfileStore } from '../shared/storage';
+import { HighlightStore } from '../shared/highlightStore';
 import { MemoryKVStore } from '../shared/kvStore';
 import { SCHEMA_VERSION } from '../shared/constants';
 import type { Profile } from '../shared/types';
@@ -31,7 +32,8 @@ const stubMessenger: TabMessenger = {
 };
 
 beforeEach(() => {
-  store = new ProfileStore(new MemoryKVStore());
+  const kv = new MemoryKVStore();
+  store = new ProfileStore(kv);
   queue = new WriteQueue();
   idCounter = 0;
   handle = makeMessageHandler({
@@ -39,6 +41,7 @@ beforeEach(() => {
     queue,
     tabs: stubTabFetcher,
     messenger: stubMessenger,
+    highlights: new HighlightStore(kv),
     now: () => 1_700_000_000_000,
     newId: () => `id-${++idCounter}`,
   });

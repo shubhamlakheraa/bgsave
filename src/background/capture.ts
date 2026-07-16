@@ -1,5 +1,5 @@
 import { LIMITS, SCHEMA_VERSION } from '../shared/constants';
-import type { Profile, SavedTab, SavedWindow } from '../shared/types';
+import type { Highlight, Profile, SavedTab, SavedWindow } from '../shared/types';
 
 // Chrome's sentinel for "not in a tab group". Hardcoded here so the pure
 // capture module doesn't need to import chrome.* types.
@@ -62,6 +62,9 @@ export interface TabLike {
   // null/undefined the SavedTab is metadata-only (restricted URL, timeout,
   // or content script failure).
   capturedState?: { scrollY: number; anchorText: string } | null;
+  // Highlights the user has persisted on this URL (read from HighlightStore
+  // at freeze time, not from the page's live DOM).
+  highlights?: Highlight[];
 }
 
 /**
@@ -89,6 +92,9 @@ export function captureTab(tab: TabLike, now: number = Date.now()): SavedTab {
     if (tab.capturedState.anchorText.length > 0) {
       saved.anchorText = tab.capturedState.anchorText;
     }
+  }
+  if (tab.highlights && tab.highlights.length > 0) {
+    saved.highlights = tab.highlights;
   }
   return saved;
 }

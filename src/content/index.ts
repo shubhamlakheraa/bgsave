@@ -1,11 +1,14 @@
 import { APP_NAME } from '../shared/constants';
 import type { ContentMessage, CapturedState } from '../shared/contentMessaging';
 import { captureState } from './capture-logic';
+import { initHighlights } from './highlights';
 
 // Run only in the top frame. Content scripts are injected into every frame
 // by default (thanks to <all_urls>), and iframe scroll positions aren't
 // what the user thinks of as "the page's scroll".
 if (window.top === window) {
+  initHighlights();
+
   chrome.runtime.onMessage.addListener((msg: ContentMessage, _sender, sendResponse) => {
     if (msg?.type === 'CAPTURE_STATE') {
       // Wrap in try/catch so an unexpected DOM edge case (detached document

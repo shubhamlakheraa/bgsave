@@ -6,6 +6,7 @@ import {
   type TabMessenger,
 } from './freeze';
 import { ProfileStore } from '../shared/storage';
+import { HighlightStore } from '../shared/highlightStore';
 import { MemoryKVStore } from '../shared/kvStore';
 import type { TabLike } from './capture';
 
@@ -32,11 +33,13 @@ function makeDeps(
   store: ProfileStore,
   id = 'p1',
   messenger: TabMessenger = makeMessenger(),
+  highlights: HighlightStore = new HighlightStore(new MemoryKVStore()),
 ): FreezeDeps {
   return {
     store,
     tabs: fetcher,
     messenger,
+    highlights,
     now: () => NOW,
     newId: () => id,
   };
@@ -192,6 +195,55 @@ describe('freezeWorkspace — tabIds path (subset from picker)', () => {
     expect(saved!.windows[0].tabs[0].anchorText).toBeUndefined();
     // Metadata still lands.
     expect(saved!.windows[0].tabs[0].url).toBe('https://slow.com');
+  });
+
+  it('bundles per-URL highlights from HighlightStore into the saved tab', async () => {
+    const kv = new MemoryKVStore();
+    const highlights = new HighlightStore(kv);
+    await highlights.addHighlight('https://a.com/doc', { text: 'foo', anchor: 'the ' });
+    await highlights.addHighlight('https://a.com/doc', { text: 'bar', anchor: 'or ' });
+
+    const fetcher = makeFetcher({
+      queryCurrentWindow: async () => [
+        { id: 10, url: 'https://a.com/doc#frag', index: 0, windowId: 1 },
+        { id: 11, url: 'https://a.com/other', index: 1, windowId: 1 },
+      ],
+      getLastFocusedWindowId: async () => 1,
+    });
+    await freezeWorkspace(
+      makeDeps(fetcher, store, 'p1', makeMessenger(), highlights),
+      { name: 'H' },
+    );
+    const saved = await store.getProfile('p1');
+    // Fragment-only variant of URL still matches thanks to normalization.
+    expect(saved!.windows[0].tabs[0].highlights).toEqual([
+      { text: 'foo', anchor: 'the ' },
+      { text: 'bar', anchor: 'or ' },
+    ]);
+    // Different path → no highlights merged, field absent.
+    expect(saved!.windows[0].tabs[1].highlights).toBeUndefined();
+  });
+
+  it('does not fetch highlights for restricted tabs', async () => {
+    let called = 0;
+    const highlights = new HighlightStore(new MemoryKVStore());
+    const originalGet = highlights.getHighlights.bind(highlights);
+    highlights.getHighlights = async (url: string) => {
+      called++;
+      return originalGet(url);
+    };
+    const fetcher = makeFetcher({
+      queryCurrentWindow: async () => [
+        { id: 10, url: 'chrome://settings', index: 0, windowId: 1 },
+        { id: 11, url: 'https://a.com', index: 1, windowId: 1 },
+      ],
+      getLastFocusedWindowId: async () => 1,
+    });
+    await freezeWorkspace(
+      makeDeps(fetcher, store, 'p1', makeMessenger(), highlights),
+      { name: 'R' },
+    );
+    expect(called).toBe(1);
   });
 
   it('propagates duplicate-name errors from ProfileStore', async () => {

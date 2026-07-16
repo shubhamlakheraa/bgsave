@@ -1,5 +1,6 @@
 import { APP_NAME, APP_VERSION } from '../shared/constants';
 import { ChromeKVStore } from '../shared/kvStore';
+import { HighlightStore } from '../shared/highlightStore';
 import { ProfileStore } from '../shared/storage';
 import { makeMessageHandler } from './router';
 import { WriteQueue } from './writeQueue';
@@ -8,13 +9,16 @@ import { makeChromeTabFetcher, makeChromeTabMessenger } from './freeze';
 // Wire-up. Instances are created at each service-worker cold start; all
 // persistent state lives in chrome.storage.local, so worker suspension
 // is transparent to callers.
-const store = new ProfileStore(new ChromeKVStore());
+const kv = new ChromeKVStore();
+const store = new ProfileStore(kv);
+const highlights = new HighlightStore(kv);
 const queue = new WriteQueue();
 const handle = makeMessageHandler({
   store,
   queue,
   tabs: makeChromeTabFetcher(),
   messenger: makeChromeTabMessenger(),
+  highlights,
   now: () => Date.now(),
   newId: () => crypto.randomUUID(),
 });
