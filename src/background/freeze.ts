@@ -1,6 +1,9 @@
+import { LIMITS } from '../shared/constants';
+import type { CapturedState } from '../shared/contentMessaging';
 import type { ProfileIndexEntry } from '../shared/types';
 import type { ProfileStore } from '../shared/storage';
-import { buildProfile, type TabLike } from './capture';
+import { withTimeout } from '../shared/withTimeout';
+import { buildProfile, isRestrictedUrl, type TabLike } from './capture';
 
 /**
  * Interface for fetching tab data from the browser. Injectable so tests
@@ -14,6 +17,15 @@ export interface TabFetcher {
   queryCurrentWindow(): Promise<TabLike[]>;
   getTabs(ids: number[]): Promise<TabLike[]>;
   getLastFocusedWindowId(): Promise<number | null>;
+}
+
+/**
+ * Ask a tab's content script for its cognitive state (scroll + anchor).
+ * Returns null when the tab can't or doesn't respond in time — the freeze
+ * still succeeds, just without state for that tab.
+ */
+export interface TabMessenger {
+  requestState(tabId: number): Promise<CapturedState | null>;
 }
 
 // Production adapter — wraps chrome.tabs / chrome.windows APIs. Skipped in
@@ -35,9 +47,25 @@ export function makeChromeTabFetcher(): TabFetcher {
   };
 }
 
+export function makeChromeTabMessenger(): TabMessenger {
+  return {
+    async requestState(tabId: number) {
+      // chrome.tabs.sendMessage rejects if the tab has no listener (e.g.
+      // content script not injected yet, or the tab navigated). We treat
+      // any failure the same as a timeout: return null, freeze anyway.
+      const send = chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_STATE' }) as Promise<
+        CapturedState | undefined
+      >;
+      const result = await withTimeout(send, LIMITS.CAPTURE_TIMEOUT_MS);
+      return result ?? null;
+    },
+  };
+}
+
 export interface FreezeDeps {
   store: ProfileStore;
   tabs: TabFetcher;
+  messenger: TabMessenger;
   // Injectable for deterministic tests. Default to Date.now() / randomUUID()
   // in production wiring.
   now: () => number;
@@ -52,8 +80,9 @@ export interface FreezeArgs {
 }
 
 /**
- * Freeze a workspace: fetch tabs, build a Profile, persist via ProfileStore,
- * return the index entry the popup can render immediately.
+ * Freeze a workspace: fetch tabs, capture cognitive state per-tab in
+ * parallel, build a Profile, persist via ProfileStore, return the index
+ * entry the popup can render immediately.
  *
  * Multi-window handling: when tabIds span multiple windows, we group tabs
  * by windowId. The focused window at capture time is marked so restore can
@@ -63,20 +92,32 @@ export async function freezeWorkspace(
   deps: FreezeDeps,
   args: FreezeArgs,
 ): Promise<ProfileIndexEntry> {
-  const tabs =
+  const rawTabs =
     args.tabIds && args.tabIds.length > 0
       ? await deps.tabs.getTabs(args.tabIds)
       : await deps.tabs.queryCurrentWindow();
 
-  if (tabs.length === 0) {
+  if (rawTabs.length === 0) {
     throw new Error('No tabs selected to freeze.');
   }
+
+  // Capture state for non-restricted tabs in parallel. Each capture races
+  // against LIMITS.CAPTURE_TIMEOUT_MS inside the messenger, so total wall
+  // time is bounded by the slowest tab, not the sum.
+  const enriched: TabLike[] = await Promise.all(
+    rawTabs.map(async (tab) => {
+      const url = tab.url ?? tab.pendingUrl ?? '';
+      if (tab.id === undefined || isRestrictedUrl(url)) return tab;
+      const state = await deps.messenger.requestState(tab.id);
+      return state ? { ...tab, capturedState: state } : tab;
+    }),
+  );
 
   // Group by windowId. Tabs from queryCurrentWindow all share one windowId;
   // tabs from a cross-window picker may span several.
   const focusedId = await deps.tabs.getLastFocusedWindowId();
   const byWindow = new Map<number, TabLike[]>();
-  for (const tab of tabs) {
+  for (const tab of enriched) {
     // If windowId is undefined (shouldn't happen for real tabs), fall back
     // to a synthetic single-window bucket keyed by -1.
     const wid = tab.windowId ?? -1;

@@ -6,7 +6,7 @@ import type {
   ResponseData,
 } from '../shared/messaging';
 import type { WriteQueue } from './writeQueue';
-import { freezeWorkspace, type TabFetcher } from './freeze';
+import { freezeWorkspace, type TabFetcher, type TabMessenger } from './freeze';
 
 // Operations that touch multiple storage keys (or otherwise mutate) go
 // through the queue. Reads run concurrently.
@@ -21,6 +21,7 @@ export interface HandlerDeps {
   store: ProfileStore;
   queue: WriteQueue;
   tabs: TabFetcher;
+  messenger: TabMessenger;
   now: () => number;
   newId: () => string;
 }
@@ -33,7 +34,7 @@ export interface HandlerDeps {
  * message boundary. Thrown errors become {ok: false, error}.
  */
 export function makeMessageHandler(deps: HandlerDeps) {
-  const { store, queue, tabs, now, newId } = deps;
+  const { store, queue, tabs, messenger, now, newId } = deps;
 
   const run = async (msg: Message): Promise<ResponseData<MessageType>> => {
     switch (msg.type) {
@@ -56,7 +57,7 @@ export function makeMessageHandler(deps: HandlerDeps) {
         return null;
       case 'FREEZE_WORKSPACE':
         return freezeWorkspace(
-          { store, tabs, now, newId },
+          { store, tabs, messenger, now, newId },
           { name: msg.name, tabIds: msg.tabIds },
         );
       default: {

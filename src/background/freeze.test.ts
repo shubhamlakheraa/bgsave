@@ -1,5 +1,10 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { freezeWorkspace, type FreezeDeps, type TabFetcher } from './freeze';
+import {
+  freezeWorkspace,
+  type FreezeDeps,
+  type TabFetcher,
+  type TabMessenger,
+} from './freeze';
 import { ProfileStore } from '../shared/storage';
 import { MemoryKVStore } from '../shared/kvStore';
 import type { TabLike } from './capture';
@@ -15,10 +20,23 @@ function makeFetcher(overrides: Partial<TabFetcher> = {}): TabFetcher {
   };
 }
 
-function makeDeps(fetcher: TabFetcher, store: ProfileStore, id = 'p1'): FreezeDeps {
+function makeMessenger(overrides: Partial<TabMessenger> = {}): TabMessenger {
+  return {
+    requestState: async () => null,
+    ...overrides,
+  };
+}
+
+function makeDeps(
+  fetcher: TabFetcher,
+  store: ProfileStore,
+  id = 'p1',
+  messenger: TabMessenger = makeMessenger(),
+): FreezeDeps {
   return {
     store,
     tabs: fetcher,
+    messenger,
     now: () => NOW,
     newId: () => id,
   };
@@ -112,6 +130,68 @@ describe('freezeWorkspace — tabIds path (subset from picker)', () => {
     await freezeWorkspace(makeDeps(fetcher, store), { name: 'Bg', tabIds: [1] });
     const saved = await store.getProfile('p1');
     expect(saved!.windows[0].focused).toBe(true);
+  });
+
+  it('merges captured state into non-restricted tabs', async () => {
+    const fetcher = makeFetcher({
+      queryCurrentWindow: async () => [
+        { id: 10, url: 'https://a.com', index: 0, windowId: 1 },
+        { id: 11, url: 'https://b.com', index: 1, windowId: 1 },
+      ],
+      getLastFocusedWindowId: async () => 1,
+    });
+    const messenger = makeMessenger({
+      requestState: async (tabId) =>
+        tabId === 10
+          ? { scrollY: 400, anchorText: 'top of A' }
+          : { scrollY: 0, anchorText: '' },
+    });
+    await freezeWorkspace(makeDeps(fetcher, store, 'p1', messenger), { name: 'CogState' });
+    const saved = await store.getProfile('p1');
+    const [a, b] = saved!.windows[0].tabs;
+    expect(a.scrollY).toBe(400);
+    expect(a.anchorText).toBe('top of A');
+    // Empty anchor from content script is dropped rather than persisted as "".
+    expect(b.scrollY).toBe(0);
+    expect(b.anchorText).toBeUndefined();
+  });
+
+  it('skips capture for restricted tabs (does not call messenger)', async () => {
+    const seen: number[] = [];
+    const fetcher = makeFetcher({
+      queryCurrentWindow: async () => [
+        { id: 10, url: 'chrome://settings', index: 0, windowId: 1 },
+        { id: 11, url: 'https://ok.com', index: 1, windowId: 1 },
+      ],
+      getLastFocusedWindowId: async () => 1,
+    });
+    const messenger = makeMessenger({
+      requestState: async (tabId) => {
+        seen.push(tabId);
+        return { scrollY: 1, anchorText: 'x' };
+      },
+    });
+    await freezeWorkspace(makeDeps(fetcher, store, 'p1', messenger), { name: 'R' });
+    expect(seen).toEqual([11]);
+    const saved = await store.getProfile('p1');
+    expect(saved!.windows[0].tabs[0].scrollY).toBeUndefined();
+    expect(saved!.windows[0].tabs[1].scrollY).toBe(1);
+  });
+
+  it('falls back to metadata-only when messenger returns null (timeout / no listener)', async () => {
+    const fetcher = makeFetcher({
+      queryCurrentWindow: async () => [
+        { id: 10, url: 'https://slow.com', index: 0, windowId: 1 },
+      ],
+      getLastFocusedWindowId: async () => 1,
+    });
+    const messenger = makeMessenger({ requestState: async () => null });
+    await freezeWorkspace(makeDeps(fetcher, store, 'p1', messenger), { name: 'Slow' });
+    const saved = await store.getProfile('p1');
+    expect(saved!.windows[0].tabs[0].scrollY).toBeUndefined();
+    expect(saved!.windows[0].tabs[0].anchorText).toBeUndefined();
+    // Metadata still lands.
+    expect(saved!.windows[0].tabs[0].url).toBe('https://slow.com');
   });
 
   it('propagates duplicate-name errors from ProfileStore', async () => {
