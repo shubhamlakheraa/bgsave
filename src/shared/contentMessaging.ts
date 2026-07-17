@@ -15,10 +15,30 @@ export interface CapturedState {
   anchorText: string;
 }
 
-export type ContentMessage = { type: 'CAPTURE_STATE' };
+// State the background asks a restored tab to apply. Both fields optional
+// so we can send a partial restore for tabs that only had one of them
+// captured (e.g., no anchor was extractable at freeze time).
+export interface RestoreState {
+  scrollY?: number;
+  anchorText?: string;
+}
+
+// Which strategy the content script used to satisfy the restore. Reported
+// back to the caller so the restore flow can surface an "N/M restored"
+// summary in the popup.
+export type ApplyMethod = 'scrollY' | 'anchor' | 'noop' | 'failed';
+
+export interface ApplyResult {
+  method: ApplyMethod;
+}
+
+export type ContentMessage =
+  | { type: 'CAPTURE_STATE' }
+  | { type: 'APPLY_STATE'; state: RestoreState };
 
 export interface ContentResponseMap {
   CAPTURE_STATE: CapturedState;
+  APPLY_STATE: ApplyResult;
 }
 
 export type ContentResponse<K extends ContentMessage['type']> = ContentResponseMap[K];

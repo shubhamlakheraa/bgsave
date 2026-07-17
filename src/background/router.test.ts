@@ -29,6 +29,7 @@ const stubTabFetcher: TabFetcher = {
 
 const stubMessenger: TabMessenger = {
   requestState: async () => null,
+  applyState: async () => null,
 };
 
 beforeEach(() => {
