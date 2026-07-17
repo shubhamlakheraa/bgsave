@@ -24,6 +24,7 @@ function makeFetcher(overrides: Partial<TabFetcher> = {}): TabFetcher {
 function makeMessenger(overrides: Partial<TabMessenger> = {}): TabMessenger {
   return {
     requestState: async () => null,
+    applyState: async () => null,
     ...overrides,
   };
 }

@@ -1,5 +1,9 @@
 import { LIMITS } from '../shared/constants';
-import type { CapturedState } from '../shared/contentMessaging';
+import type {
+  ApplyResult,
+  CapturedState,
+  RestoreState,
+} from '../shared/contentMessaging';
 import type { HighlightStore } from '../shared/highlightStore';
 import type { ProfileIndexEntry } from '../shared/types';
 import type { ProfileStore } from '../shared/storage';
@@ -21,12 +25,14 @@ export interface TabFetcher {
 }
 
 /**
- * Ask a tab's content script for its cognitive state (scroll + anchor).
- * Returns null when the tab can't or doesn't respond in time — the freeze
- * still succeeds, just without state for that tab.
+ * Ask a tab's content script for its cognitive state (scroll + anchor),
+ * or push saved state back to a tab during restore. Both methods return
+ * null when the tab can't or doesn't respond in time — the freeze or
+ * restore still proceeds, just without that tab's state.
  */
 export interface TabMessenger {
   requestState(tabId: number): Promise<CapturedState | null>;
+  applyState(tabId: number, state: RestoreState): Promise<ApplyResult | null>;
 }
 
 // Production adapter — wraps chrome.tabs / chrome.windows APIs. Skipped in
@@ -57,6 +63,14 @@ export function makeChromeTabMessenger(): TabMessenger {
       const send = chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_STATE' }) as Promise<
         CapturedState | undefined
       >;
+      const result = await withTimeout(send, LIMITS.CAPTURE_TIMEOUT_MS);
+      return result ?? null;
+    },
+    async applyState(tabId, state) {
+      const send = chrome.tabs.sendMessage(tabId, {
+        type: 'APPLY_STATE',
+        state,
+      }) as Promise<ApplyResult | undefined>;
       const result = await withTimeout(send, LIMITS.CAPTURE_TIMEOUT_MS);
       return result ?? null;
     },

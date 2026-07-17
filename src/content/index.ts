@@ -1,5 +1,10 @@
 import { APP_NAME } from '../shared/constants';
-import type { ContentMessage, CapturedState } from '../shared/contentMessaging';
+import type {
+  ApplyResult,
+  CapturedState,
+  ContentMessage,
+} from '../shared/contentMessaging';
+import { applyState } from './apply-logic';
 import { captureState } from './capture-logic';
 import { initHighlights } from './highlights';
 
@@ -21,7 +26,18 @@ if (window.top === window) {
         console.warn(`[${APP_NAME}] capture failed:`, err);
         sendResponse({ scrollY: 0, anchorText: '' });
       }
-      // Synchronous response — no `return true` needed.
+      return;
+    }
+
+    if (msg?.type === 'APPLY_STATE') {
+      try {
+        const method = applyState(document, window, msg.state);
+        const result: ApplyResult = { method };
+        sendResponse(result);
+      } catch (err) {
+        console.warn(`[${APP_NAME}] apply failed:`, err);
+        sendResponse({ method: 'failed' } satisfies ApplyResult);
+      }
       return;
     }
   });
