@@ -59,6 +59,14 @@ function isHighlight(value: unknown): value is Highlight {
   );
 }
 
+function isFrameState(value: unknown): boolean {
+  if (!isRecord(value)) return false;
+  if (typeof value.url !== 'string') return false;
+  if (value.scrollY !== undefined && typeof value.scrollY !== 'number') return false;
+  if (value.anchorText !== undefined && typeof value.anchorText !== 'string') return false;
+  return true;
+}
+
 function isSavedTab(value: unknown): value is SavedTab {
   if (!isRecord(value)) return false;
   if (typeof value.url !== 'string') return false;
@@ -73,6 +81,10 @@ function isSavedTab(value: unknown): value is SavedTab {
   if (value.highlights !== undefined) {
     if (!Array.isArray(value.highlights)) return false;
     if (!value.highlights.every(isHighlight)) return false;
+  }
+  if (value.frames !== undefined) {
+    if (!Array.isArray(value.frames)) return false;
+    if (!value.frames.every(isFrameState)) return false;
   }
   return true;
 }

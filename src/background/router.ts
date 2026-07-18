@@ -7,7 +7,17 @@ import type {
   ResponseData,
 } from '../shared/messaging';
 import type { WriteQueue } from './writeQueue';
-import { freezeWorkspace, type TabFetcher, type TabMessenger } from './freeze';
+import {
+  freezeWorkspace,
+  type FramesEnumerator,
+  type TabFetcher,
+  type TabMessenger,
+} from './freeze';
+import {
+  restoreWorkspace,
+  type TabCreator,
+  type TabLoadWaiter,
+} from './restore';
 
 // Operations that touch multiple storage keys (or otherwise mutate) go
 // through the queue. Reads run concurrently.
@@ -16,6 +26,7 @@ const QUEUED_OPS: ReadonlySet<MessageType> = new Set<MessageType>([
   'DELETE_PROFILE',
   'RENAME_PROFILE',
   'FREEZE_WORKSPACE',
+  'RESTORE_WORKSPACE',
 ]);
 
 export interface HandlerDeps {
@@ -24,6 +35,9 @@ export interface HandlerDeps {
   tabs: TabFetcher;
   messenger: TabMessenger;
   highlights: HighlightStore;
+  creator: TabCreator;
+  waiter: TabLoadWaiter;
+  frames: FramesEnumerator;
   now: () => number;
   newId: () => string;
 }
@@ -36,7 +50,18 @@ export interface HandlerDeps {
  * message boundary. Thrown errors become {ok: false, error}.
  */
 export function makeMessageHandler(deps: HandlerDeps) {
-  const { store, queue, tabs, messenger, highlights, now, newId } = deps;
+  const {
+    store,
+    queue,
+    tabs,
+    messenger,
+    highlights,
+    creator,
+    waiter,
+    frames,
+    now,
+    newId,
+  } = deps;
 
   const run = async (msg: Message): Promise<ResponseData<MessageType>> => {
     switch (msg.type) {
@@ -59,8 +84,13 @@ export function makeMessageHandler(deps: HandlerDeps) {
         return null;
       case 'FREEZE_WORKSPACE':
         return freezeWorkspace(
-          { store, tabs, messenger, highlights, now, newId },
+          { store, tabs, messenger, highlights, frames, now, newId },
           { name: msg.name, tabIds: msg.tabIds },
+        );
+      case 'RESTORE_WORKSPACE':
+        return restoreWorkspace(
+          { store, highlights, creator, waiter, messenger, frames },
+          { id: msg.id },
         );
       default: {
         const _exhaustive: never = msg;

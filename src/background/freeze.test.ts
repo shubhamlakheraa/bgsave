@@ -1,6 +1,7 @@
 import { describe, it, expect, beforeEach } from 'vitest';
 import {
   freezeWorkspace,
+  type FramesEnumerator,
   type FreezeDeps,
   type TabFetcher,
   type TabMessenger,
@@ -29,18 +30,24 @@ function makeMessenger(overrides: Partial<TabMessenger> = {}): TabMessenger {
   };
 }
 
+function makeFrames(overrides: Partial<FramesEnumerator> = {}): FramesEnumerator {
+  return { getFrames: async () => [], ...overrides };
+}
+
 function makeDeps(
   fetcher: TabFetcher,
   store: ProfileStore,
   id = 'p1',
   messenger: TabMessenger = makeMessenger(),
   highlights: HighlightStore = new HighlightStore(new MemoryKVStore()),
+  frames: FramesEnumerator = makeFrames(),
 ): FreezeDeps {
   return {
     store,
     tabs: fetcher,
     messenger,
     highlights,
+    frames,
     now: () => NOW,
     newId: () => id,
   };
@@ -245,6 +252,50 @@ describe('freezeWorkspace — tabIds path (subset from picker)', () => {
       { name: 'R' },
     );
     expect(called).toBe(1);
+  });
+
+  it('captures iframe state per non-restricted, non-top frame', async () => {
+    const fetcher = makeFetcher({
+      queryCurrentWindow: async () => [
+        { id: 10, url: 'https://parent.com', index: 0, windowId: 1 },
+      ],
+      getLastFocusedWindowId: async () => 1,
+    });
+    const seen: Array<{ tabId: number; frameId: number | undefined }> = [];
+    const messenger = makeMessenger({
+      requestState: async (tabId, frameId) => {
+        seen.push({ tabId, frameId });
+        if (frameId === undefined) {
+          // Top-frame request from the outer capture path.
+          return { scrollY: 0, anchorText: 'top-anchor-substantive-enough' };
+        }
+        if (frameId === 42) {
+          return { scrollY: 500, anchorText: 'iframe-anchor-substantive-enough' };
+        }
+        return null;
+      },
+    });
+    const frames = makeFrames({
+      getFrames: async () => [
+        { frameId: 0, url: 'https://parent.com' },
+        { frameId: 42, url: 'https://embed.com/frame' },
+        { frameId: 99, url: 'chrome-extension://xyz/panel.html' }, // unreachable
+      ],
+    });
+    await freezeWorkspace(
+      makeDeps(fetcher, store, 'p1', messenger, undefined, frames),
+      { name: 'IF' },
+    );
+    // Top frame + one iframe requested; the about:blank one skipped.
+    expect(seen.map((s) => s.frameId).sort()).toEqual([42, undefined]);
+    const saved = await store.getProfile('p1');
+    expect(saved!.windows[0].tabs[0].frames).toEqual([
+      {
+        url: 'https://embed.com/frame',
+        scrollY: 500,
+        anchorText: 'iframe-anchor-substantive-enough',
+      },
+    ]);
   });
 
   it('propagates duplicate-name errors from ProfileStore', async () => {

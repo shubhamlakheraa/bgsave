@@ -9,6 +9,14 @@ export interface Highlight {
   anchor: string;
 }
 
+export interface FrameState {
+  // Frame URL at capture time. Used to match the frame on restore since
+  // frameId is not stable across page loads.
+  url: string;
+  scrollY?: number;
+  anchorText?: string;
+}
+
 export interface SavedTab {
   url: string;
   title: string;
@@ -26,6 +34,11 @@ export interface SavedTab {
   // when the page has changed since capture.
   anchorText?: string;
   highlights?: Highlight[];
+  // Per-iframe state, one entry per non-top-frame that responded during
+  // capture. Empty/absent when the page has no iframes we care about
+  // (Claude artifacts, YouTube embeds, docs previews are the interesting
+  // cases). Matched back to live frames by URL on restore.
+  frames?: FrameState[];
 }
 
 export interface SavedWindow {
