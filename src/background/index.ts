@@ -4,7 +4,12 @@ import { HighlightStore } from '../shared/highlightStore';
 import { ProfileStore } from '../shared/storage';
 import { makeMessageHandler } from './router';
 import { WriteQueue } from './writeQueue';
-import { makeChromeTabFetcher, makeChromeTabMessenger } from './freeze';
+import {
+  makeChromeFramesEnumerator,
+  makeChromeTabFetcher,
+  makeChromeTabMessenger,
+} from './freeze';
+import { makeChromeTabCreator, makeChromeTabLoadWaiter } from './restore';
 
 // Wire-up. Instances are created at each service-worker cold start; all
 // persistent state lives in chrome.storage.local, so worker suspension
@@ -19,6 +24,9 @@ const handle = makeMessageHandler({
   tabs: makeChromeTabFetcher(),
   messenger: makeChromeTabMessenger(),
   highlights,
+  creator: makeChromeTabCreator(),
+  waiter: makeChromeTabLoadWaiter(),
+  frames: makeChromeFramesEnumerator(),
   now: () => Date.now(),
   newId: () => crypto.randomUUID(),
 });

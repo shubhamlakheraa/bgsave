@@ -37,44 +37,68 @@ export function findAnchorElement(doc: Document, anchorText: string): Element | 
   return node as Element | null;
 }
 
+// Anchor must be at least this many characters to be trusted at restore
+// time. Short strings ("Web", "Menu") often occur many times on a page,
+// so scrolling to the first match would land the user in the wrong spot.
+// Kept in sync with computeAnchor's ANCHOR_MIN_LEN — separate constant
+// because they may drift apart if the schema evolves.
+const ANCHOR_MIN_APPLY_LEN = 20;
+
+// scrollY values at or below this are treated as "no window scroll" —
+// SPAs with internal scroll containers commonly report window.scrollY = 0
+// no matter how far the user scrolled. Applying scrollTo(0) is a no-op
+// and shouldn't count as success.
+const SCROLL_MIN_TARGET_PX = 100;
+
 /**
  * Restore the page's scroll position from a captured RestoreState.
  *
- * Strategy (in order):
- *  1. If `scrollY` is present, try it. If the effective position lands
- *     within SCROLL_TOLERANCE_PX, we're done.
- *  2. Otherwise, if `anchorText` is present, search for it in the DOM and
- *     scroll the containing element into view.
- *  3. If neither yields a result, return 'failed' — the caller has enough
- *     signal to report partial restore in the UI, but the tab is still
- *     usable at scroll position 0.
+ * Strategy:
+ *  1. If scrollY is substantial, apply it eagerly. This has two benefits:
+ *     it approximates the reading position for pages where anchor may
+ *     not resolve, and it *triggers virtualization* on long pages — many
+ *     SPAs only render sections near the current scroll position, so the
+ *     anchor text isn't in the DOM until we scroll to roughly the right
+ *     place first.
+ *  2. If anchor is present and long enough, resolve and `scrollIntoView`
+ *     on the containing element. This refines the position — after
+ *     step 1's approximation, virtualization has usually rendered the
+ *     anchor into the DOM, so `scrollIntoView` lands us precisely.
+ *  3. Report the best result — 'anchor' if step 2 landed, 'scrollY' if
+ *     step 1 landed within tolerance, otherwise 'failed' so the caller
+ *     retries as late-rendered content arrives.
  *
- * Returns 'noop' when the RestoreState carries no information at all
- * (both fields absent) so an empty restore doesn't look like a failure.
+ * Returns 'noop' when the RestoreState carries no information at all.
  */
 export function applyState(
   doc: Document,
   win: Window,
   state: RestoreState,
 ): ApplyMethod {
-  const hasScroll = typeof state.scrollY === 'number';
-  const hasAnchor = typeof state.anchorText === 'string' && state.anchorText.length > 0;
-  if (!hasScroll && !hasAnchor) return 'noop';
+  const scrollTarget = typeof state.scrollY === 'number' ? state.scrollY : null;
+  const hasSubstantialScroll = scrollTarget !== null && scrollTarget >= SCROLL_MIN_TARGET_PX;
+  const anchor = state.anchorText;
+  const hasAnchor = typeof anchor === 'string' && anchor.length >= ANCHOR_MIN_APPLY_LEN;
+  if (scrollTarget === null && !hasAnchor) return 'noop';
 
-  if (hasScroll) {
-    win.scrollTo({ top: state.scrollY!, left: 0, behavior: 'auto' });
-    // Verify against the actual position; a shorter page silently clamps
-    // to its own scrollHeight and we want to catch that.
-    const delta = Math.abs(win.scrollY - state.scrollY!);
-    if (delta <= SCROLL_TOLERANCE_PX) return 'scrollY';
+  // Step 1: rough scroll first so virtualization can render nearby content.
+  if (hasSubstantialScroll) {
+    win.scrollTo({ top: scrollTarget!, left: 0, behavior: 'auto' });
   }
 
+  // Step 2: anchor refines and wins if it resolves.
   if (hasAnchor) {
-    const el = findAnchorElement(doc, state.anchorText!);
+    const el = findAnchorElement(doc, anchor!);
     if (el) {
       el.scrollIntoView({ block: 'start', behavior: 'auto' });
       return 'anchor';
     }
+  }
+
+  // Step 3: report scrollY if it landed close enough (page tall enough).
+  if (hasSubstantialScroll) {
+    const delta = Math.abs(win.scrollY - scrollTarget!);
+    if (delta <= SCROLL_TOLERANCE_PX) return 'scrollY';
   }
 
   return 'failed';

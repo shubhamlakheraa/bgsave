@@ -1,5 +1,18 @@
 import type { Profile, ProfileIndexEntry, ValidationResult } from './types';
 
+// Summary returned by RESTORE_WORKSPACE so the popup can render a short
+// "Restored 8 tabs (7 with state)" toast after the fact.
+export interface RestoreSummary {
+  windowsCreated: number;
+  tabsCreated: number;
+  // Tabs where APPLY_STATE returned scrollY or anchor (i.e. cognitive state
+  // was reapplied). Restricted / no-state tabs don't count here — they're
+  // still counted in tabsCreated.
+  tabsWithState: number;
+  // Tabs that failed to load in time or failed APPLY_STATE outright.
+  tabsFailed: number;
+}
+
 // ---------------------------------------------------------------------------
 // Message contract: single source of truth for background operations.
 //
@@ -17,7 +30,8 @@ export type Message =
   | { type: 'DELETE_PROFILE'; id: string }
   | { type: 'RENAME_PROFILE'; id: string; newName: string }
   | { type: 'VALIDATE_NAME'; name: string; excludeId?: string }
-  | { type: 'FREEZE_WORKSPACE'; name: string; tabIds?: number[] };
+  | { type: 'FREEZE_WORKSPACE'; name: string; tabIds?: number[] }
+  | { type: 'RESTORE_WORKSPACE'; id: string };
 
 export type MessageType = Message['type'];
 
@@ -30,6 +44,7 @@ export interface ResponseMap {
   RENAME_PROFILE: null;
   VALIDATE_NAME: ValidationResult;
   FREEZE_WORKSPACE: ProfileIndexEntry;
+  RESTORE_WORKSPACE: RestoreSummary;
 }
 
 export type ResponseData<K extends MessageType> = ResponseMap[K];

@@ -1,12 +1,17 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_NAME } from '../shared/constants';
-import { sendToBackground } from '../shared/messaging';
+import { sendToBackground, type RestoreSummary } from '../shared/messaging';
 import { formatRelativeTime } from '../shared/time';
 import { isRestrictedUrl } from '../background/capture';
 import type { ProfileIndexEntry } from '../shared/types';
 
 type ConnStatus = 'pending' | 'connected' | 'disconnected';
 type Mode = 'list' | 'freezing' | 'saving';
+
+interface Toast {
+  kind: 'success' | 'error';
+  message: string;
+}
 
 interface TabRow {
   id: number;
@@ -18,11 +23,20 @@ interface TabRow {
   pinned: boolean;
 }
 
+function summarizeRestore(s: RestoreSummary): string {
+  const parts: string[] = [`Restored ${s.tabsCreated} tab${s.tabsCreated === 1 ? '' : 's'}`];
+  if (s.tabsWithState > 0) parts.push(`${s.tabsWithState} with state`);
+  if (s.tabsFailed > 0) parts.push(`${s.tabsFailed} drifted`);
+  return parts.join(' · ');
+}
+
 export function App() {
   const [profiles, setProfiles] = useState<ProfileIndexEntry[] | null>(null);
   const [conn, setConn] = useState<ConnStatus>('pending');
   const [mode, setMode] = useState<Mode>('list');
   const [error, setError] = useState<string | null>(null);
+  const [restoringId, setRestoringId] = useState<string | null>(null);
+  const [toast, setToast] = useState<Toast | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -69,6 +83,22 @@ export function App() {
     [refresh],
   );
 
+  const handleRestore = useCallback(async (id: string) => {
+    setRestoringId(id);
+    setToast(null);
+    try {
+      const summary = await sendToBackground({ type: 'RESTORE_WORKSPACE', id });
+      setToast({ kind: 'success', message: summarizeRestore(summary) });
+    } catch (err) {
+      setToast({
+        kind: 'error',
+        message: err instanceof Error ? err.message : String(err),
+      });
+    } finally {
+      setRestoringId(null);
+    }
+  }, []);
+
   return (
     <main className="popup">
       <header className="popup__header">
@@ -102,7 +132,17 @@ export function App() {
 
       {error && <p className="popup__error">{error}</p>}
 
-      {mode === 'list' && <ProfileList profiles={profiles} />}
+      {toast && (
+        <p className={`popup__toast popup__toast--${toast.kind}`}>{toast.message}</p>
+      )}
+
+      {mode === 'list' && (
+        <ProfileList
+          profiles={profiles}
+          restoringId={restoringId}
+          onRestore={handleRestore}
+        />
+      )}
 
       <footer className={`popup__status popup__status--${conn}`}>
         <span className="popup__status-dot" aria-hidden />
@@ -116,7 +156,15 @@ export function App() {
   );
 }
 
-function ProfileList({ profiles }: { profiles: ProfileIndexEntry[] | null }) {
+function ProfileList({
+  profiles,
+  restoringId,
+  onRestore,
+}: {
+  profiles: ProfileIndexEntry[] | null;
+  restoringId: string | null;
+  onRestore: (id: string) => void;
+}) {
   if (profiles === null) {
     return <p className="popup__hint">Loading workspaces…</p>;
   }
@@ -128,16 +176,31 @@ function ProfileList({ profiles }: { profiles: ProfileIndexEntry[] | null }) {
     );
   }
   const now = Date.now();
+  const busy = restoringId !== null;
   return (
     <ul className="popup__list">
-      {profiles.map((p) => (
-        <li key={p.id} className="popup__row">
-          <span className="popup__row-name">{p.name}</span>
-          <span className="popup__row-meta">
-            {p.tabCount} tab{p.tabCount === 1 ? '' : 's'} · {formatRelativeTime(p.updatedAt, now)}
-          </span>
-        </li>
-      ))}
+      {profiles.map((p) => {
+        const isRestoringThis = restoringId === p.id;
+        return (
+          <li key={p.id} className="popup__row">
+            <div className="popup__row-info">
+              <span className="popup__row-name">{p.name}</span>
+              <span className="popup__row-meta">
+                {p.tabCount} tab{p.tabCount === 1 ? '' : 's'} ·{' '}
+                {formatRelativeTime(p.updatedAt, now)}
+              </span>
+            </div>
+            <button
+              type="button"
+              className="popup__row-action"
+              onClick={() => onRestore(p.id)}
+              disabled={busy}
+            >
+              {isRestoringThis ? 'Restoring…' : 'Restore'}
+            </button>
+          </li>
+        );
+      })}
     </ul>
   );
 }

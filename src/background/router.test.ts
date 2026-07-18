@@ -6,7 +6,8 @@ import { HighlightStore } from '../shared/highlightStore';
 import { MemoryKVStore } from '../shared/kvStore';
 import { SCHEMA_VERSION } from '../shared/constants';
 import type { Profile } from '../shared/types';
-import type { TabFetcher, TabMessenger } from './freeze';
+import type { FramesEnumerator, TabFetcher, TabMessenger } from './freeze';
+import type { TabCreator, TabLoadWaiter } from './restore';
 
 let store: ProfileStore;
 let queue: WriteQueue;
@@ -32,6 +33,23 @@ const stubMessenger: TabMessenger = {
   applyState: async () => null,
 };
 
+const stubCreator: TabCreator = {
+  createWindow: async (urls) => ({
+    windowId: 999,
+    tabIds: urls.map((_, i) => 1000 + i),
+  }),
+  setPinned: async () => undefined,
+  focusWindow: async () => undefined,
+};
+
+const stubWaiter: TabLoadWaiter = {
+  waitForLoad: async () => true,
+};
+
+const stubFrames: FramesEnumerator = {
+  getFrames: async () => [],
+};
+
 beforeEach(() => {
   const kv = new MemoryKVStore();
   store = new ProfileStore(kv);
@@ -43,6 +61,9 @@ beforeEach(() => {
     tabs: stubTabFetcher,
     messenger: stubMessenger,
     highlights: new HighlightStore(kv),
+    creator: stubCreator,
+    waiter: stubWaiter,
+    frames: stubFrames,
     now: () => 1_700_000_000_000,
     newId: () => `id-${++idCounter}`,
   });

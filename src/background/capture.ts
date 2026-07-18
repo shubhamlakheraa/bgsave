@@ -65,6 +65,9 @@ export interface TabLike {
   // Highlights the user has persisted on this URL (read from HighlightStore
   // at freeze time, not from the page's live DOM).
   highlights?: Highlight[];
+  // Per-iframe state, one entry per non-top-frame with a real URL that
+  // responded to CAPTURE_STATE during freeze.
+  frames?: Array<{ url: string; scrollY: number; anchorText: string }>;
 }
 
 /**
@@ -95,6 +98,19 @@ export function captureTab(tab: TabLike, now: number = Date.now()): SavedTab {
   }
   if (tab.highlights && tab.highlights.length > 0) {
     saved.highlights = tab.highlights;
+  }
+  if (tab.frames && tab.frames.length > 0) {
+    saved.frames = tab.frames
+      .filter((f) => f.url && (f.scrollY > 0 || f.anchorText.length > 0))
+      .map((f) => {
+        const frame: { url: string; scrollY?: number; anchorText?: string } = {
+          url: f.url,
+        };
+        if (f.scrollY > 0) frame.scrollY = f.scrollY;
+        if (f.anchorText.length > 0) frame.anchorText = f.anchorText;
+        return frame;
+      });
+    if (saved.frames.length === 0) delete saved.frames;
   }
   return saved;
 }

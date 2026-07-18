@@ -29,10 +29,26 @@ export interface TabFetcher {
  * or push saved state back to a tab during restore. Both methods return
  * null when the tab can't or doesn't respond in time — the freeze or
  * restore still proceeds, just without that tab's state.
+ *
+ * `frameId` targets a specific frame; when omitted the top frame is used.
+ * With `all_frames: true` in the manifest, each frame has its own message
+ * listener, so per-frame capture/apply requires per-frame calls.
  */
 export interface TabMessenger {
-  requestState(tabId: number): Promise<CapturedState | null>;
-  applyState(tabId: number, state: RestoreState): Promise<ApplyResult | null>;
+  requestState(tabId: number, frameId?: number): Promise<CapturedState | null>;
+  applyState(
+    tabId: number,
+    state: RestoreState,
+    frameId?: number,
+  ): Promise<ApplyResult | null>;
+}
+
+/**
+ * Enumerate all frames of a tab. Uses chrome.webNavigation.getAllFrames
+ * in production; injectable so tests don't need Chrome's frame graph.
+ */
+export interface FramesEnumerator {
+  getFrames(tabId: number): Promise<Array<{ frameId: number; url: string }>>;
 }
 
 // Production adapter — wraps chrome.tabs / chrome.windows APIs. Skipped in
@@ -56,23 +72,42 @@ export function makeChromeTabFetcher(): TabFetcher {
 
 export function makeChromeTabMessenger(): TabMessenger {
   return {
-    async requestState(tabId: number) {
+    async requestState(tabId: number, frameId?: number) {
       // chrome.tabs.sendMessage rejects if the tab has no listener (e.g.
       // content script not injected yet, or the tab navigated). We treat
       // any failure the same as a timeout: return null, freeze anyway.
-      const send = chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_STATE' }) as Promise<
-        CapturedState | undefined
-      >;
+      const send = (
+        frameId !== undefined
+          ? chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_STATE' }, { frameId })
+          : chrome.tabs.sendMessage(tabId, { type: 'CAPTURE_STATE' })
+      ) as Promise<CapturedState | undefined>;
       const result = await withTimeout(send, LIMITS.CAPTURE_TIMEOUT_MS);
       return result ?? null;
     },
-    async applyState(tabId, state) {
-      const send = chrome.tabs.sendMessage(tabId, {
-        type: 'APPLY_STATE',
-        state,
-      }) as Promise<ApplyResult | undefined>;
+    async applyState(tabId, state, frameId) {
+      const send = (
+        frameId !== undefined
+          ? chrome.tabs.sendMessage(tabId, { type: 'APPLY_STATE', state }, { frameId })
+          : chrome.tabs.sendMessage(tabId, { type: 'APPLY_STATE', state })
+      ) as Promise<ApplyResult | undefined>;
       const result = await withTimeout(send, LIMITS.CAPTURE_TIMEOUT_MS);
       return result ?? null;
+    },
+  };
+}
+
+export function makeChromeFramesEnumerator(): FramesEnumerator {
+  return {
+    async getFrames(tabId: number) {
+      try {
+        const frames = await chrome.webNavigation.getAllFrames({ tabId });
+        return (frames ?? []).map((f) => ({ frameId: f.frameId, url: f.url }));
+      } catch {
+        // Frame enumeration fails for restricted tabs and mid-navigation
+        // states. Callers treat an empty list as "top frame only" and
+        // proceed via the plain top-frame path.
+        return [];
+      }
     },
   };
 }
@@ -85,6 +120,9 @@ export interface FreezeDeps {
   // Independent of the content-script capture path — highlights are
   // authoritative in storage, not in the live DOM.
   highlights: HighlightStore;
+  // Enumerate iframes of each tab so we can capture their scroll state
+  // separately (Claude artifacts, YouTube embeds, docs previews).
+  frames: FramesEnumerator;
   // Injectable for deterministic tests. Default to Date.now() / randomUUID()
   // in production wiring.
   now: () => number;
@@ -129,13 +167,21 @@ export async function freezeWorkspace(
     rawTabs.map(async (tab) => {
       const url = tab.url ?? tab.pendingUrl ?? '';
       if (tab.id === undefined || isRestrictedUrl(url)) return tab;
-      const [state, highlights] = await Promise.all([
+
+      const [state, highlights, frames] = await Promise.all([
         deps.messenger.requestState(tab.id),
         deps.highlights.getHighlights(url).catch(() => []),
+        deps.frames.getFrames(tab.id).catch(() => []),
       ]);
+
+      // Non-top frames with a real URL: capture each in parallel. The top
+      // frame is frameId 0 — already handled by the requestState() above.
+      const iframeStates = await captureIframeStates(deps.messenger, tab.id, frames);
+
       const next: TabLike = { ...tab };
       if (state) next.capturedState = state;
       if (highlights.length > 0) next.highlights = highlights;
+      if (iframeStates.length > 0) next.frames = iframeStates;
       return next;
     }),
   );
@@ -179,4 +225,48 @@ export async function freezeWorkspace(
     tabCount: profile.windows.reduce((sum, w) => sum + w.tabs.length, 0),
     updatedAt: profile.updatedAt,
   };
+}
+
+/**
+ * Iframes may legitimately live at URLs that isRestrictedUrl blocks for
+ * top-level tabs — most importantly `about:srcdoc`, which is what Claude
+ * artifacts render into. `match_about_blank`/`match_origin_as_fallback` in
+ * the manifest let content scripts inject there, so we don't want to skip
+ * capturing them. We still filter chrome-scheme frames (extension DevTools
+ * iframes, etc.) since our content script can't run there.
+ */
+function isCapturableIframeUrl(url: string): boolean {
+  if (!url) return false;
+  if (url.startsWith('chrome://')) return false;
+  if (url.startsWith('chrome-extension://')) return false;
+  if (url.startsWith('devtools://')) return false;
+  return true;
+}
+
+/**
+ * Capture state from every iframe of a tab that has a URL our content
+ * script can reach. Returns entries for frames that actually had
+ * scroll/anchor to record — iframes with nothing to preserve are dropped
+ * rather than persisted as empty rows.
+ */
+async function captureIframeStates(
+  messenger: TabMessenger,
+  tabId: number,
+  frames: Array<{ frameId: number; url: string }>,
+): Promise<Array<{ url: string; scrollY: number; anchorText: string }>> {
+  const targets = frames.filter(
+    (f) => f.frameId !== 0 && isCapturableIframeUrl(f.url),
+  );
+  if (targets.length === 0) return [];
+
+  const captured = await Promise.all(
+    targets.map(async (f) => {
+      const state = await messenger.requestState(tabId, f.frameId);
+      if (!state) return null;
+      return { url: f.url, scrollY: state.scrollY, anchorText: state.anchorText };
+    }),
+  );
+  return captured.filter(
+    (x): x is { url: string; scrollY: number; anchorText: string } => x !== null,
+  );
 }

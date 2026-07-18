@@ -31,6 +31,11 @@ export const LIMITS = {
   ANCHOR_TEXT_MAX: 200,
   TITLE_MAX: 200,
   CAPTURE_TIMEOUT_MS: 2000,
+  // Wait up to this long for a restored tab to reach 'complete' before we
+  // give up on APPLY_STATE for it. Big pages and slow networks are the
+  // realistic upper bound; beyond this the user is better off scrolling
+  // manually than waiting for us.
+  RESTORE_LOAD_TIMEOUT_MS: 10_000,
   // Prefix length (chars of preceding text) used to disambiguate a highlight
   // from other occurrences of the same text on the page.
   HIGHLIGHT_ANCHOR_MAX: 60,

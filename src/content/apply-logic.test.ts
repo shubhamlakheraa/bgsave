@@ -14,6 +14,11 @@ function installScroll(maxScrollY: number) {
   }) as typeof window.scrollTo;
 }
 
+// Anchors used in tests must be >= 20 chars to be accepted by applyState;
+// this mirrors ANCHOR_MIN_APPLY_LEN. Short strings would be silently
+// treated as "no anchor" — which would test the wrong branch.
+const LONG_ANCHOR = 'the substantive phrase we are looking for';
+
 beforeEach(() => {
   document.body.innerHTML = '';
 });
@@ -50,42 +55,70 @@ describe('applyState', () => {
     expect(applyState(document, window, {})).toBe('noop');
   });
 
-  it("returns 'scrollY' when the exact position lands within tolerance", () => {
+  it("scrolls to scrollY first, then anchor refines and wins the return value", () => {
+    installScroll(5000);
+    document.body.innerHTML = `<p id="p">Some page text about ${LONG_ANCHOR} for restore.</p>`;
+    const spy = vi.fn();
+    document.getElementById('p')!.scrollIntoView = spy;
+    const result = applyState(document, window, {
+      scrollY: 1200,
+      anchorText: LONG_ANCHOR,
+    });
+    expect(result).toBe('anchor');
+    expect(spy).toHaveBeenCalledWith({ block: 'start', behavior: 'auto' });
+    // scrollY is applied first (to trigger virtualization) — window.scrollY
+    // moved to 1200 before anchor's scrollIntoView ran.
+    expect(window.scrollY).toBe(1200);
+  });
+
+  it("falls back to scrollY when the anchor missed and scrollY is provided", () => {
+    installScroll(5000);
+    document.body.innerHTML = '<p>Nothing containing the saved anchor phrase.</p>';
+    expect(
+      applyState(document, window, {
+        scrollY: 1200,
+        anchorText: LONG_ANCHOR,
+      }),
+    ).toBe('scrollY');
+    expect(window.scrollY).toBe(1200);
+  });
+
+  it("uses raw scrollY when only scrollY is provided", () => {
     installScroll(5000);
     expect(applyState(document, window, { scrollY: 1200 })).toBe('scrollY');
     expect(window.scrollY).toBe(1200);
   });
 
-  it("falls back to 'anchor' when the page is too short for scrollY", () => {
-    installScroll(300); // page maxes out at 300, target is 1200 → clamp
-    document.body.innerHTML = '<p>Some target phrase for restore.</p>';
-    const el = document.body.querySelector('p')!;
-    const spy = vi.fn();
-    el.scrollIntoView = spy;
-    const result = applyState(document, window, {
-      scrollY: 1200,
-      anchorText: 'target phrase',
-    });
-    expect(result).toBe('anchor');
-    expect(spy).toHaveBeenCalledWith({ block: 'start', behavior: 'auto' });
+  it("ignores anchors shorter than the min-apply length", () => {
+    // "short" (5 chars) is below the min-apply threshold, so applyState
+    // treats it as if no anchor was provided and falls through to scrollY.
+    installScroll(5000);
+    document.body.innerHTML = '<p>Contains short in here.</p>';
+    const p = document.body.querySelector('p')!;
+    const scrollSpy = vi.fn();
+    p.scrollIntoView = scrollSpy;
+    expect(
+      applyState(document, window, { scrollY: 300, anchorText: 'short' }),
+    ).toBe('scrollY');
+    expect(scrollSpy).not.toHaveBeenCalled();
   });
 
-  it("returns 'failed' when neither scrollY lands nor anchor resolves", () => {
+  it("returns 'failed' when anchor missed and scrollY clamps", () => {
     installScroll(0);
     document.body.innerHTML = '<p>Nothing matches.</p>';
     const result = applyState(document, window, {
       scrollY: 999,
-      anchorText: 'ghost text',
+      anchorText: LONG_ANCHOR,
     });
     expect(result).toBe('failed');
   });
 
-  it('uses anchor path when scrollY is absent but anchor is present', () => {
+  it("uses anchor path when scrollY is absent but anchor is present", () => {
     installScroll(5000);
-    document.body.innerHTML = '<h1 id="h">Anchor Here</h1>';
+    document.body.innerHTML = `<h1 id="h">${LONG_ANCHOR}</h1>`;
     const spy = vi.fn();
     document.getElementById('h')!.scrollIntoView = spy;
-    const result = applyState(document, window, { anchorText: 'Anchor Here' });
+    const result = applyState(document, window, { anchorText: LONG_ANCHOR });
     expect(result).toBe('anchor');
     expect(spy).toHaveBeenCalled();
   });
