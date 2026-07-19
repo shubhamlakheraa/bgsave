@@ -31,7 +31,16 @@ export type Message =
   | { type: 'RENAME_PROFILE'; id: string; newName: string }
   | { type: 'VALIDATE_NAME'; name: string; excludeId?: string }
   | { type: 'FREEZE_WORKSPACE'; name: string; tabIds?: number[] }
-  | { type: 'RESTORE_WORKSPACE'; id: string };
+  | { type: 'RESTORE_WORKSPACE'; id: string }
+  | { type: 'APPEND_TAB'; profileId: string; tabId: number };
+
+// Outcome of appending one tab to an existing workspace. `kind: 'appended'`
+// carries the new tab count so the context-menu handler can render a
+// success badge without a follow-up LIST_PROFILES call.
+export type AppendTabResult =
+  | { kind: 'appended'; tabCount: number; tabsWithState: number }
+  | { kind: 'duplicate' }
+  | { kind: 'not_found' };
 
 export type MessageType = Message['type'];
 
@@ -45,6 +54,7 @@ export interface ResponseMap {
   VALIDATE_NAME: ValidationResult;
   FREEZE_WORKSPACE: ProfileIndexEntry;
   RESTORE_WORKSPACE: RestoreSummary;
+  APPEND_TAB: AppendTabResult;
 }
 
 export type ResponseData<K extends MessageType> = ResponseMap[K];
