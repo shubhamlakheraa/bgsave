@@ -11,6 +11,7 @@ import type {
   ValidationResult,
 } from './types';
 import {
+  countTabsWithState,
   isProfile,
   isProfileIndex,
   normalizeName,
@@ -102,6 +103,7 @@ export class ProfileStore {
       name: normalized.name,
       tabCount: normalized.windows.reduce((sum, w) => sum + w.tabs.length, 0),
       updatedAt: normalized.updatedAt,
+      tabsWithState: countTabsWithState(normalized),
     };
     const existingIdx = index.findIndex((e) => e.id === normalized.id);
     const nextIndex =

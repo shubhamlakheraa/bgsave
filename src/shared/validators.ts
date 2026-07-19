@@ -13,6 +13,40 @@ export function normalizeName(name: string): string {
   return name.trim();
 }
 
+// True when a SavedTab carries meaningful cognitive state — a substantive
+// scroll position, an anchor, any highlights, or any per-iframe state. Used
+// by the drift indicator so a workspace with 12 tabs but only 3 non-trivial
+// captures shows "12 tabs · 3 with state" instead of pretending all 12 will
+// come back with full context.
+//
+// scrollY >= 100 is the same "no real scroll" cutoff we apply at restore
+// (SPAs commonly report scrollY = 0 no matter how far the user scrolled).
+export function tabHasState(tab: SavedTab): boolean {
+  if (typeof tab.scrollY === 'number' && tab.scrollY >= 100) return true;
+  if (typeof tab.anchorText === 'string' && tab.anchorText.length > 0) return true;
+  if (tab.highlights && tab.highlights.length > 0) return true;
+  if (tab.frames && tab.frames.some((f) =>
+    (typeof f.scrollY === 'number' && f.scrollY >= 100) ||
+    (typeof f.anchorText === 'string' && f.anchorText.length > 0),
+  )) {
+    return true;
+  }
+  return false;
+}
+
+// Sum tabHasState across every window in a profile. Called at save time to
+// stash the count into ProfileIndexEntry so the popup can render the drift
+// badge without loading each full profile.
+export function countTabsWithState(profile: Profile): number {
+  let count = 0;
+  for (const w of profile.windows) {
+    for (const t of w.tabs) {
+      if (tabHasState(t)) count++;
+    }
+  }
+  return count;
+}
+
 /**
  * Validate a profile name.
  * - Must be 1..60 chars after trimming
@@ -111,13 +145,17 @@ export function isProfile(value: unknown): value is Profile {
 }
 
 export function isProfileIndexEntry(value: unknown): value is ProfileIndexEntry {
-  return (
-    isRecord(value) &&
-    typeof value.id === 'string' &&
-    typeof value.name === 'string' &&
-    typeof value.tabCount === 'number' &&
-    typeof value.updatedAt === 'number'
-  );
+  if (!isRecord(value)) return false;
+  if (typeof value.id !== 'string') return false;
+  if (typeof value.name !== 'string') return false;
+  if (typeof value.tabCount !== 'number') return false;
+  if (typeof value.updatedAt !== 'number') return false;
+  // tabsWithState is optional for backwards compatibility with indexes
+  // written before the field existed.
+  if (value.tabsWithState !== undefined && typeof value.tabsWithState !== 'number') {
+    return false;
+  }
+  return true;
 }
 
 export function isProfileIndex(value: unknown): value is ProfileIndexEntry[] {

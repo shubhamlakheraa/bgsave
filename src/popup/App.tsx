@@ -3,7 +3,8 @@ import { APP_NAME } from '../shared/constants';
 import { sendToBackground, type RestoreSummary } from '../shared/messaging';
 import { formatRelativeTime } from '../shared/time';
 import { isRestrictedUrl } from '../background/capture';
-import type { ProfileIndexEntry } from '../shared/types';
+import type { Profile, ProfileIndexEntry, SavedTab } from '../shared/types';
+import { tabHasState } from '../shared/validators';
 
 type ConnStatus = 'pending' | 'connected' | 'disconnected';
 type Mode = 'list' | 'freezing' | 'saving';
@@ -30,6 +31,13 @@ function summarizeRestore(s: RestoreSummary): string {
   return parts.join(' · ');
 }
 
+// Cache entry for a lazily fetched profile preview. Keyed by the profile's
+// updatedAt so a workspace re-saved under the same id auto-invalidates.
+interface PreviewCacheEntry {
+  updatedAt: number;
+  profile: Profile;
+}
+
 export function App() {
   const [profiles, setProfiles] = useState<ProfileIndexEntry[] | null>(null);
   const [conn, setConn] = useState<ConnStatus>('pending');
@@ -37,6 +45,12 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [restoringId, setRestoringId] = useState<string | null>(null);
   const [toast, setToast] = useState<Toast | null>(null);
+  const [expandedIds, setExpandedIds] = useState<Set<string>>(new Set());
+  const [previewCache, setPreviewCache] = useState<Map<string, PreviewCacheEntry>>(
+    new Map(),
+  );
+  const [previewLoading, setPreviewLoading] = useState<Set<string>>(new Set());
+  const [previewError, setPreviewError] = useState<Map<string, string>>(new Map());
 
   const refresh = useCallback(async () => {
     try {
@@ -81,6 +95,54 @@ export function App() {
       }
     },
     [refresh],
+  );
+
+  const handleToggleExpand = useCallback(
+    async (entry: ProfileIndexEntry) => {
+      const { id, updatedAt } = entry;
+      const wasOpen = expandedIds.has(id);
+      setExpandedIds((prev) => {
+        const next = new Set(prev);
+        if (wasOpen) next.delete(id);
+        else next.add(id);
+        return next;
+      });
+      if (wasOpen) return;
+
+      // Serve from cache if it matches the current updatedAt; otherwise fetch.
+      const cached = previewCache.get(id);
+      if (cached && cached.updatedAt === updatedAt) return;
+
+      setPreviewLoading((prev) => new Set(prev).add(id));
+      setPreviewError((prev) => {
+        if (!prev.has(id)) return prev;
+        const next = new Map(prev);
+        next.delete(id);
+        return next;
+      });
+      try {
+        const profile = await sendToBackground({ type: 'GET_PROFILE', id });
+        if (!profile) throw new Error('Workspace not found.');
+        setPreviewCache((prev) => {
+          const next = new Map(prev);
+          next.set(id, { updatedAt: profile.updatedAt, profile });
+          return next;
+        });
+      } catch (err) {
+        setPreviewError((prev) => {
+          const next = new Map(prev);
+          next.set(id, err instanceof Error ? err.message : String(err));
+          return next;
+        });
+      } finally {
+        setPreviewLoading((prev) => {
+          const next = new Set(prev);
+          next.delete(id);
+          return next;
+        });
+      }
+    },
+    [expandedIds, previewCache],
   );
 
   const handleRestore = useCallback(async (id: string) => {
@@ -140,6 +202,11 @@ export function App() {
         <ProfileList
           profiles={profiles}
           restoringId={restoringId}
+          expandedIds={expandedIds}
+          previewCache={previewCache}
+          previewLoading={previewLoading}
+          previewError={previewError}
+          onToggleExpand={handleToggleExpand}
           onRestore={handleRestore}
         />
       )}
@@ -156,13 +223,30 @@ export function App() {
   );
 }
 
+function driftLabel(tabCount: number, tabsWithState: number | undefined): string {
+  if (tabsWithState === undefined) return '';
+  if (tabsWithState === 0) return 'metadata only';
+  if (tabsWithState === tabCount) return 'all with state';
+  return `${tabsWithState} with state`;
+}
+
 function ProfileList({
   profiles,
   restoringId,
+  expandedIds,
+  previewCache,
+  previewLoading,
+  previewError,
+  onToggleExpand,
   onRestore,
 }: {
   profiles: ProfileIndexEntry[] | null;
   restoringId: string | null;
+  expandedIds: Set<string>;
+  previewCache: Map<string, PreviewCacheEntry>;
+  previewLoading: Set<string>;
+  previewError: Map<string, string>;
+  onToggleExpand: (entry: ProfileIndexEntry) => void;
   onRestore: (id: string) => void;
 }) {
   if (profiles === null) {
@@ -181,23 +265,108 @@ function ProfileList({
     <ul className="popup__list">
       {profiles.map((p) => {
         const isRestoringThis = restoringId === p.id;
+        const isOpen = expandedIds.has(p.id);
+        const cached = previewCache.get(p.id);
+        const drift = driftLabel(p.tabCount, p.tabsWithState);
         return (
-          <li key={p.id} className="popup__row">
-            <div className="popup__row-info">
-              <span className="popup__row-name">{p.name}</span>
-              <span className="popup__row-meta">
-                {p.tabCount} tab{p.tabCount === 1 ? '' : 's'} ·{' '}
-                {formatRelativeTime(p.updatedAt, now)}
-              </span>
+          <li key={p.id} className="popup__row-wrap">
+            <div className="popup__row">
+              <button
+                type="button"
+                className="popup__chevron"
+                onClick={() => onToggleExpand(p)}
+                aria-expanded={isOpen}
+                aria-label={isOpen ? 'Collapse workspace' : 'Expand workspace'}
+              >
+                {isOpen ? '▾' : '▸'}
+              </button>
+              <div className="popup__row-info">
+                <span className="popup__row-name">{p.name}</span>
+                <span className="popup__row-meta">
+                  {p.tabCount} tab{p.tabCount === 1 ? '' : 's'}
+                  {drift && (
+                    <>
+                      {' · '}
+                      <span
+                        className={
+                          p.tabsWithState === 0
+                            ? 'popup__drift popup__drift--none'
+                            : 'popup__drift'
+                        }
+                      >
+                        {drift}
+                      </span>
+                    </>
+                  )}
+                  {' · '}
+                  {formatRelativeTime(p.updatedAt, now)}
+                </span>
+              </div>
+              <button
+                type="button"
+                className="popup__row-action"
+                onClick={() => onRestore(p.id)}
+                disabled={busy}
+              >
+                {isRestoringThis ? 'Restoring…' : 'Restore'}
+              </button>
             </div>
-            <button
-              type="button"
-              className="popup__row-action"
-              onClick={() => onRestore(p.id)}
-              disabled={busy}
-            >
-              {isRestoringThis ? 'Restoring…' : 'Restore'}
-            </button>
+            {isOpen && (
+              <PreviewPanel
+                loading={previewLoading.has(p.id)}
+                error={previewError.get(p.id) ?? null}
+                profile={cached?.profile ?? null}
+              />
+            )}
+          </li>
+        );
+      })}
+    </ul>
+  );
+}
+
+function PreviewPanel({
+  loading,
+  error,
+  profile,
+}: {
+  loading: boolean;
+  error: string | null;
+  profile: Profile | null;
+}) {
+  if (loading && !profile) {
+    return <p className="popup__preview-hint">Loading tabs…</p>;
+  }
+  if (error) {
+    return <p className="popup__preview-error">{error}</p>;
+  }
+  if (!profile) return null;
+  const tabs: SavedTab[] = profile.windows.flatMap((w) => w.tabs);
+  if (tabs.length === 0) {
+    return <p className="popup__preview-hint">No tabs in this workspace.</p>;
+  }
+  return (
+    <ul className="popup__preview">
+      {tabs.map((t, i) => {
+        const markers: string[] = [];
+        if (typeof t.scrollY === 'number' && t.scrollY >= 100) markers.push('scroll');
+        if (typeof t.anchorText === 'string' && t.anchorText.length > 0) markers.push('anchor');
+        if (t.highlights && t.highlights.length > 0) markers.push('highlights');
+        if (t.frames && t.frames.length > 0) markers.push('iframe');
+        const hasState = tabHasState(t);
+        return (
+          <li key={`${t.url}-${i}`} className="popup__preview-row">
+            <span className="popup__preview-title" title={t.title}>
+              {t.title || '(untitled)'}
+            </span>
+            <span className="popup__preview-url" title={t.url}>
+              {t.restricted ? 'restricted' : hostOf(t.url)}
+            </span>
+            {hasState && markers.length > 0 && (
+              <span className="popup__preview-markers" title={markers.join(' · ')}>
+                {markers.map((m) => m[0]).join('')}
+              </span>
+            )}
           </li>
         );
       })}
