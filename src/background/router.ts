@@ -7,6 +7,7 @@ import type {
   ResponseData,
 } from '../shared/messaging';
 import type { WriteQueue } from './writeQueue';
+import { appendTabToWorkspace } from './append';
 import {
   freezeWorkspace,
   type FramesEnumerator,
@@ -27,6 +28,7 @@ const QUEUED_OPS: ReadonlySet<MessageType> = new Set<MessageType>([
   'RENAME_PROFILE',
   'FREEZE_WORKSPACE',
   'RESTORE_WORKSPACE',
+  'APPEND_TAB',
 ]);
 
 export interface HandlerDeps {
@@ -92,6 +94,16 @@ export function makeMessageHandler(deps: HandlerDeps) {
           { store, highlights, creator, waiter, messenger, frames },
           { id: msg.id },
         );
+      case 'APPEND_TAB': {
+        // Look up the live tab once here; the pure append fn takes it as
+        // a plain TabLike so its tests don't need chrome.tabs at all.
+        const [tab] = await tabs.getTabs([msg.tabId]);
+        if (!tab) throw new Error(`Tab ${msg.tabId} not found.`);
+        return appendTabToWorkspace(
+          { store, messenger, highlights, frames, now },
+          { profileId: msg.profileId, tab },
+        );
+      }
       default: {
         const _exhaustive: never = msg;
         throw new Error(`Unknown message type: ${JSON.stringify(_exhaustive)}`);
