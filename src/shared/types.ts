@@ -64,6 +64,11 @@ export interface ProfileIndexEntry {
   name: string;
   tabCount: number;
   updatedAt: number;
+  // Number of tabs whose captured cognitive state was non-trivial — used to
+  // render the drift indicator in the popup ("12 tabs · 8 with state").
+  // Optional so index entries written before this field existed still
+  // validate; readers treat missing as 0.
+  tabsWithState?: number;
 }
 
 export type ValidationResult =

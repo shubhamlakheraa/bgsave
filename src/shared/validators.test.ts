@@ -1,12 +1,15 @@
 import { describe, it, expect } from 'vitest';
 import {
+  countTabsWithState,
   isProfile,
   isProfileIndex,
+  isProfileIndexEntry,
   normalizeName,
+  tabHasState,
   validateProfileName,
 } from './validators';
 import { SCHEMA_VERSION } from './constants';
-import type { Profile, ProfileIndexEntry } from './types';
+import type { Profile, ProfileIndexEntry, SavedTab } from './types';
 
 const makeIndexEntry = (over: Partial<ProfileIndexEntry> = {}): ProfileIndexEntry => ({
   id: 'p1',
@@ -117,5 +120,100 @@ describe('isProfileIndex', () => {
 
   it('rejects arrays with malformed entries', () => {
     expect(isProfileIndex([{ id: 'x' }])).toBe(false);
+  });
+});
+
+describe('isProfileIndexEntry — tabsWithState back-compat', () => {
+  it('accepts entries without tabsWithState (old index shape)', () => {
+    expect(isProfileIndexEntry(makeIndexEntry())).toBe(true);
+  });
+
+  it('accepts entries with a numeric tabsWithState', () => {
+    expect(isProfileIndexEntry(makeIndexEntry({ tabsWithState: 5 }))).toBe(true);
+  });
+
+  it('rejects entries with a non-numeric tabsWithState', () => {
+    expect(
+      isProfileIndexEntry({ ...makeIndexEntry(), tabsWithState: 'many' as never }),
+    ).toBe(false);
+  });
+});
+
+const makeTab = (over: Partial<SavedTab> = {}): SavedTab => ({
+  url: 'https://a.com',
+  title: 'A',
+  pinned: false,
+  groupId: -1,
+  index: 0,
+  restricted: false,
+  capturedAt: 1_700_000_000_000,
+  ...over,
+});
+
+describe('tabHasState', () => {
+  it('returns false for a plain metadata-only tab', () => {
+    expect(tabHasState(makeTab())).toBe(false);
+  });
+
+  it('returns false for a scrollY below the substantial-scroll threshold', () => {
+    // Matches SCROLL_MIN_TARGET_PX behavior at restore — SPAs commonly emit
+    // scrollY = 0 no matter how far the user scrolled, so <100 doesn't
+    // count as real state.
+    expect(tabHasState(makeTab({ scrollY: 50 }))).toBe(false);
+  });
+
+  it('returns true for a substantial scrollY', () => {
+    expect(tabHasState(makeTab({ scrollY: 400 }))).toBe(true);
+  });
+
+  it('returns true when any anchor text was captured', () => {
+    expect(tabHasState(makeTab({ anchorText: 'x' }))).toBe(true);
+  });
+
+  it('returns true when at least one highlight was captured', () => {
+    expect(
+      tabHasState(makeTab({ highlights: [{ text: 't', anchor: 'a' }] })),
+    ).toBe(true);
+  });
+
+  it('returns true when at least one frame has state', () => {
+    expect(
+      tabHasState(
+        makeTab({
+          frames: [{ url: 'https://iframe.com', scrollY: 500 }],
+        }),
+      ),
+    ).toBe(true);
+  });
+
+  it('ignores frame entries with only metadata (no scroll or anchor)', () => {
+    expect(
+      tabHasState(makeTab({ frames: [{ url: 'https://iframe.com' }] })),
+    ).toBe(false);
+  });
+});
+
+describe('countTabsWithState', () => {
+  it('sums across every window in the profile', () => {
+    const profile = makeValidProfile();
+    profile.windows = [
+      {
+        focused: true,
+        tabs: [
+          makeTab({ scrollY: 400 }),
+          makeTab({ url: 'https://b.com' }), // no state
+        ],
+      },
+      {
+        focused: false,
+        tabs: [makeTab({ url: 'https://c.com', anchorText: 'hi' })],
+      },
+    ];
+    expect(countTabsWithState(profile)).toBe(2);
+  });
+
+  it('returns 0 when nothing has state', () => {
+    const profile = makeValidProfile();
+    expect(countTabsWithState(profile)).toBe(0);
   });
 });

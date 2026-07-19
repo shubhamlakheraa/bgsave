@@ -56,6 +56,44 @@ describe('ProfileStore CRUD', () => {
     expect(loaded!.updatedAt).toBeGreaterThan(0);
   });
 
+  it('records tabsWithState in the index entry based on captured state', async () => {
+    // Two tabs — one with real scroll, one with just metadata. The drift
+    // count should be 1 (only the substantial-scroll tab counts).
+    const p = makeProfile({
+      name: 'Drift',
+      windows: [
+        {
+          focused: true,
+          tabs: [
+            {
+              url: 'https://a.com',
+              title: 'A',
+              pinned: false,
+              groupId: -1,
+              index: 0,
+              restricted: false,
+              capturedAt: 1,
+              scrollY: 400,
+            },
+            {
+              url: 'https://b.com',
+              title: 'B',
+              pinned: false,
+              groupId: -1,
+              index: 1,
+              restricted: false,
+              capturedAt: 1,
+            },
+          ],
+        },
+      ],
+    });
+    await store.saveProfile(p);
+    const list = await store.listProfiles();
+    expect(list[0].tabsWithState).toBe(1);
+    expect(list[0].tabCount).toBe(2);
+  });
+
   it('updates an existing profile in place', async () => {
     const p = makeProfile({ name: 'A' });
     await store.saveProfile(p);
