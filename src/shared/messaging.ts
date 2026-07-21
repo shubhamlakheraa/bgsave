@@ -32,7 +32,13 @@ export type Message =
   | { type: 'VALIDATE_NAME'; name: string; excludeId?: string }
   | { type: 'FREEZE_WORKSPACE'; name: string; tabIds?: number[] }
   | { type: 'RESTORE_WORKSPACE'; id: string }
-  | { type: 'APPEND_TAB'; profileId: string; tabId: number };
+  | { type: 'APPEND_TAB'; profileId: string; tabId: number }
+  | {
+      type: 'REMOVE_TAB';
+      profileId: string;
+      windowIndex: number;
+      tabIndex: number;
+    };
 
 // Outcome of appending one tab to an existing workspace. `kind: 'appended'`
 // carries the new tab count so the context-menu handler can render a
@@ -41,6 +47,14 @@ export type AppendTabResult =
   | { kind: 'appended'; tabCount: number; tabsWithState: number }
   | { kind: 'duplicate' }
   | { kind: 'not_found' };
+
+// Outcome of removing one tab from a workspace. `last_tab` is a distinct
+// case so the options page can say "delete the workspace instead" rather
+// than a generic error.
+export type RemoveTabResult =
+  | { kind: 'removed'; tabCount: number; tabsWithState: number }
+  | { kind: 'not_found' }
+  | { kind: 'last_tab' };
 
 export type MessageType = Message['type'];
 
@@ -55,6 +69,7 @@ export interface ResponseMap {
   FREEZE_WORKSPACE: ProfileIndexEntry;
   RESTORE_WORKSPACE: RestoreSummary;
   APPEND_TAB: AppendTabResult;
+  REMOVE_TAB: RemoveTabResult;
 }
 
 export type ResponseData<K extends MessageType> = ResponseMap[K];

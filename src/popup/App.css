@@ -26,6 +26,28 @@ body {
   letter-spacing: -0.01em;
 }
 
+.popup__header-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.popup__manage {
+  font: inherit;
+  font-size: 14px;
+  line-height: 1;
+  padding: 5px 8px;
+  border-radius: 6px;
+  border: 1px solid rgba(128, 128, 128, 0.35);
+  background: transparent;
+  color: inherit;
+  cursor: pointer;
+}
+
+.popup__manage:hover {
+  background: rgba(128, 128, 128, 0.12);
+}
+
 .popup__freeze {
   font-size: 12px;
   font-weight: 500;
