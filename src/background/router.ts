@@ -8,6 +8,7 @@ import type {
 } from '../shared/messaging';
 import type { WriteQueue } from './writeQueue';
 import { appendTabToWorkspace } from './append';
+import { removeTabFromWorkspace } from './removeTab';
 import {
   freezeWorkspace,
   type FramesEnumerator,
@@ -29,6 +30,7 @@ const QUEUED_OPS: ReadonlySet<MessageType> = new Set<MessageType>([
   'FREEZE_WORKSPACE',
   'RESTORE_WORKSPACE',
   'APPEND_TAB',
+  'REMOVE_TAB',
 ]);
 
 export interface HandlerDeps {
@@ -104,6 +106,15 @@ export function makeMessageHandler(deps: HandlerDeps) {
           { profileId: msg.profileId, tab },
         );
       }
+      case 'REMOVE_TAB':
+        return removeTabFromWorkspace(
+          { store, now },
+          {
+            profileId: msg.profileId,
+            windowIndex: msg.windowIndex,
+            tabIndex: msg.tabIndex,
+          },
+        );
       default: {
         const _exhaustive: never = msg;
         throw new Error(`Unknown message type: ${JSON.stringify(_exhaustive)}`);

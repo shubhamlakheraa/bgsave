@@ -166,17 +166,28 @@ export function App() {
       <header className="popup__header">
         <h1 className="popup__title">{APP_NAME}</h1>
         {mode === 'list' && (
-          <button
-            type="button"
-            className="popup__freeze"
-            onClick={() => {
-              setError(null);
-              setMode('freezing');
-            }}
-            disabled={conn !== 'connected'}
-          >
-            + Freeze
-          </button>
+          <div className="popup__header-actions">
+            <button
+              type="button"
+              className="popup__manage"
+              onClick={() => chrome.runtime.openOptionsPage()}
+              title="Manage workspaces"
+              aria-label="Manage workspaces"
+            >
+              ⚙
+            </button>
+            <button
+              type="button"
+              className="popup__freeze"
+              onClick={() => {
+                setError(null);
+                setMode('freezing');
+              }}
+              disabled={conn !== 'connected'}
+            >
+              + Freeze
+            </button>
+          </div>
         )}
       </header>
 
