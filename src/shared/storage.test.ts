@@ -1,7 +1,12 @@
 import { describe, it, expect, beforeEach } from 'vitest';
-import { ProfileStore } from './storage';
-import { MemoryKVStore } from './kvStore';
-import { SCHEMA_VERSION, STORAGE_KEYS, corruptedKey, profileKey } from './constants';
+import { ProfileStore, QuotaExceededError } from './storage';
+import { MemoryKVStore, type KVStore } from './kvStore';
+import {
+  SCHEMA_VERSION,
+  STORAGE_KEYS,
+  corruptedKey,
+  profileKey,
+} from './constants';
 import type { Profile } from './types';
 
 let kv: MemoryKVStore;
@@ -240,5 +245,42 @@ describe('ProfileStore crash-safe ordering', () => {
     expect(indexUpdate).toBeGreaterThanOrEqual(0);
     expect(blobRemoval).toBeGreaterThanOrEqual(0);
     expect(indexUpdate).toBeLessThan(blobRemoval);
+  });
+});
+
+describe('ProfileStore quota handling', () => {
+  it('wraps Chrome-style QUOTA_BYTES errors from the underlying kv', async () => {
+    const inner = new MemoryKVStore();
+    const failing: KVStore = {
+      get: (k) => inner.get(k),
+      set: async () => {
+        // Mirror the shape of chrome.runtime.lastError when Chrome refuses
+        // a write because the profile blob crosses the per-item limit.
+        throw new Error('QUOTA_BYTES_PER_ITEM quota exceeded');
+      },
+      remove: (k) => inner.remove(k),
+      keys: () => inner.keys(),
+      getBytesInUse: async () => 0,
+    };
+    const s = new ProfileStore(failing);
+    await expect(s.saveProfile(makeProfile())).rejects.toBeInstanceOf(
+      QuotaExceededError,
+    );
+  });
+
+  it('lets non-quota errors bubble up unchanged', async () => {
+    const inner = new MemoryKVStore();
+    const boom = new Error('disk on fire');
+    const failing: KVStore = {
+      get: (k) => inner.get(k),
+      set: async () => {
+        throw boom;
+      },
+      remove: (k) => inner.remove(k),
+      keys: () => inner.keys(),
+      getBytesInUse: async () => 0,
+    };
+    const s = new ProfileStore(failing);
+    await expect(s.saveProfile(makeProfile())).rejects.toBe(boom);
   });
 });

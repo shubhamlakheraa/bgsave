@@ -19,6 +19,29 @@ import {
 } from './validators';
 
 /**
+ * Thrown when a write is refused because chrome.storage.local is out of
+ * room. Router maps this to an envelope with `code: 'quota_exceeded'` so
+ * the popup/options can render a specific "you're out of space" message
+ * instead of a generic error toast.
+ */
+export class QuotaExceededError extends Error {
+  readonly code = 'quota_exceeded' as const;
+  constructor(message = 'Storage quota exceeded — delete some workspaces to free space.') {
+    super(message);
+    this.name = 'QuotaExceededError';
+  }
+}
+
+// chrome.storage.local surfaces the two quota conditions via error strings.
+// We match on the tokens (case-insensitive to be safe) so we don't couple
+// to the exact phrasing Chrome ships in a given release.
+function isQuotaError(err: unknown): boolean {
+  if (!(err instanceof Error)) return false;
+  const msg = err.message.toUpperCase();
+  return msg.includes('QUOTA_BYTES') || msg.includes('QUOTA_EXCEEDED');
+}
+
+/**
  * ProfileStore — CRUD over profiles with crash-safe write ordering.
  *
  * Storage layout:
@@ -94,10 +117,6 @@ export class ProfileStore {
       createdAt: profile.createdAt || now,
     };
 
-    // 1. Write blob first — index will still be consistent if we crash here.
-    await this.kv.set(profileKey(normalized.id), normalized);
-
-    // 2. Then update the index atomically.
     const entry: ProfileIndexEntry = {
       id: normalized.id,
       name: normalized.name,
@@ -111,7 +130,15 @@ export class ProfileStore {
         ? [...index, entry]
         : index.map((e, i) => (i === existingIdx ? entry : e));
 
-    await this.kv.set(STORAGE_KEYS.PROFILE_INDEX, nextIndex);
+    try {
+      // 1. Write blob first — index will still be consistent if we crash here.
+      await this.kv.set(profileKey(normalized.id), normalized);
+      // 2. Then update the index atomically.
+      await this.kv.set(STORAGE_KEYS.PROFILE_INDEX, nextIndex);
+    } catch (err) {
+      if (isQuotaError(err)) throw new QuotaExceededError();
+      throw err;
+    }
   }
 
   async renameProfile(id: string, newName: string): Promise<void> {

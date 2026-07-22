@@ -1,9 +1,14 @@
 import type { HighlightStore } from '../shared/highlightStore';
-import type { ProfileStore } from '../shared/storage';
+import { QuotaExceededError, type ProfileStore } from '../shared/storage';
+import {
+  STORAGE_QUOTA_BYTES,
+  STORAGE_WARN_BYTES,
+} from '../shared/constants';
 import type {
   Envelope,
   Message,
   MessageType,
+  QuotaUsage,
   ResponseData,
 } from '../shared/messaging';
 import type { WriteQueue } from './writeQueue';
@@ -44,6 +49,10 @@ export interface HandlerDeps {
   frames: FramesEnumerator;
   now: () => number;
   newId: () => string;
+  // Bytes currently held in the underlying KVStore. Passed as a getter
+  // (not the KVStore itself) so the router stays unaware of the storage
+  // implementation.
+  bytesInUse: () => Promise<number>;
 }
 
 /**
@@ -65,6 +74,7 @@ export function makeMessageHandler(deps: HandlerDeps) {
     frames,
     now,
     newId,
+    bytesInUse,
   } = deps;
 
   const run = async (msg: Message): Promise<ResponseData<MessageType>> => {
@@ -115,6 +125,16 @@ export function makeMessageHandler(deps: HandlerDeps) {
             tabIndex: msg.tabIndex,
           },
         );
+      case 'GET_QUOTA_USAGE': {
+        const used = await bytesInUse();
+        const usage: QuotaUsage = {
+          bytesInUse: used,
+          warnBytes: STORAGE_WARN_BYTES,
+          quotaBytes: STORAGE_QUOTA_BYTES,
+          percent: Math.round((used / STORAGE_QUOTA_BYTES) * 100) / 100,
+        };
+        return usage;
+      }
       default: {
         const _exhaustive: never = msg;
         throw new Error(`Unknown message type: ${JSON.stringify(_exhaustive)}`);
@@ -132,6 +152,9 @@ export function makeMessageHandler(deps: HandlerDeps) {
       return { ok: true, data: data as ResponseData<M['type']> };
     } catch (err) {
       const error = err instanceof Error ? err.message : String(err);
+      if (err instanceof QuotaExceededError) {
+        return { ok: false, error, code: 'quota_exceeded' };
+      }
       return { ok: false, error };
     }
   };

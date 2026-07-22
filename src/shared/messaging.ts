@@ -38,7 +38,19 @@ export type Message =
       profileId: string;
       windowIndex: number;
       tabIndex: number;
-    };
+    }
+  | { type: 'GET_QUOTA_USAGE' };
+
+// Snapshot of chrome.storage.local usage. Popup/options render a banner
+// once `percent` crosses the warn threshold so the user can prune before
+// Chrome starts rejecting writes.
+export interface QuotaUsage {
+  bytesInUse: number;
+  warnBytes: number;
+  quotaBytes: number;
+  // Fraction 0..1. Rounded to two decimals to avoid noisy re-renders.
+  percent: number;
+}
 
 // Outcome of appending one tab to an existing workspace. `kind: 'appended'`
 // carries the new tab count so the context-menu handler can render a
@@ -70,15 +82,29 @@ export interface ResponseMap {
   RESTORE_WORKSPACE: RestoreSummary;
   APPEND_TAB: AppendTabResult;
   REMOVE_TAB: RemoveTabResult;
+  GET_QUOTA_USAGE: QuotaUsage;
 }
 
 export type ResponseData<K extends MessageType> = ResponseMap[K];
+
+// Codes attached to error envelopes so the UI can branch on well-known
+// failure modes (currently just quota) without string-matching.
+export type ErrorCode = 'quota_exceeded';
 
 // Wire-level envelope — background always responds with this shape so
 // errors can cross the message boundary (thrown errors can't).
 export type Envelope<T> =
   | { ok: true; data: T }
-  | { ok: false; error: string };
+  | { ok: false; error: string; code?: ErrorCode };
+
+// Thrown by sendToBackground so callers can `instanceof` check for the
+// well-known error codes (quota, etc.) without parsing message strings.
+export class BackgroundError extends Error {
+  constructor(message: string, readonly code?: ErrorCode) {
+    super(message);
+    this.name = 'BackgroundError';
+  }
+}
 
 /**
  * Send a message to the background worker and get back a typed response.
@@ -96,7 +122,7 @@ export async function sendToBackground<M extends Message>(
     throw new Error(`No response from background for ${msg.type}.`);
   }
   if (envelope.ok === false) {
-    throw new Error(envelope.error);
+    throw new BackgroundError(envelope.error, envelope.code);
   }
   return envelope.data;
 }

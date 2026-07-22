@@ -1,6 +1,11 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_NAME } from '../shared/constants';
-import { sendToBackground, type RestoreSummary } from '../shared/messaging';
+import {
+  BackgroundError,
+  sendToBackground,
+  type QuotaUsage,
+  type RestoreSummary,
+} from '../shared/messaging';
 import { formatRelativeTime } from '../shared/time';
 import { isRestrictedUrl } from '../background/capture';
 import type { Profile, ProfileIndexEntry, SavedTab } from '../shared/types';
@@ -51,6 +56,19 @@ export function App() {
   );
   const [previewLoading, setPreviewLoading] = useState<Set<string>>(new Set());
   const [previewError, setPreviewError] = useState<Map<string, string>>(new Map());
+  // `quotaBlocked` is set only when a write is actually rejected by Chrome,
+  // and cleared the moment a subsequent write succeeds. That way the banner
+  // and reality never disagree — the user only sees the "storage full"
+  // message when they truly can't save.
+  const [quotaBlocked, setQuotaBlocked] = useState<QuotaUsage | null>(null);
+
+  const readQuota = useCallback(async (): Promise<QuotaUsage | null> => {
+    try {
+      return await sendToBackground({ type: 'GET_QUOTA_USAGE' });
+    } catch {
+      return null;
+    }
+  }, []);
 
   const refresh = useCallback(async () => {
     try {
@@ -87,14 +105,24 @@ export function App() {
       setError(null);
       try {
         await sendToBackground({ type: 'FREEZE_WORKSPACE', name, tabIds });
+        // The save survived, so we're not blocked by quota (a rejection would
+        // have thrown). Clear the banner if it was set.
+        setQuotaBlocked(null);
         await refresh();
         setMode('list');
       } catch (err) {
-        setError(err instanceof Error ? err.message : String(err));
+        if (err instanceof BackgroundError && err.code === 'quota_exceeded') {
+          setQuotaBlocked(await readQuota());
+          setError(
+            'Storage is full. Delete some workspaces on the manage page before freezing new ones.',
+          );
+        } else {
+          setError(err instanceof Error ? err.message : String(err));
+        }
         setMode('freezing');
       }
     },
-    [refresh],
+    [readQuota, refresh],
   );
 
   const handleToggleExpand = useCallback(
@@ -203,6 +231,8 @@ export function App() {
         />
       )}
 
+      {quotaBlocked && <QuotaBanner usage={quotaBlocked} />}
+
       {error && <p className="popup__error">{error}</p>}
 
       {toast && (
@@ -231,6 +261,20 @@ export function App() {
         </span>
       </footer>
     </main>
+  );
+}
+
+function formatMB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function QuotaBanner({ usage }: { usage: QuotaUsage }) {
+  return (
+    <div className="popup__quota popup__quota--critical" role="status">
+      <strong>Storage full</strong> — {formatMB(usage.bytesInUse)} MB of{' '}
+      {formatMB(usage.quotaBytes)} MB used. Delete unused workspaces from the manage
+      page.
+    </div>
   );
 }
 
