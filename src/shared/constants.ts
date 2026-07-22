@@ -48,3 +48,13 @@ export const LIMITS = {
 } as const;
 
 export const SCHEMA_VERSION = 1 as const;
+
+// chrome.storage.local caps unmarked (unlimitedStorage) extensions at 10MB.
+// We use the same number as MemoryKVStore's ceiling so tests hit the same
+// gate. If unlimitedStorage is added to the manifest later the ceiling
+// disappears in prod, but keeping the warn threshold sane is still useful.
+export const STORAGE_QUOTA_BYTES = 10 * 1024 * 1024;
+// Soft warning threshold. When usage crosses this we surface a banner but
+// still allow writes. Picked at 80% to give the user real headroom to
+// prune before Chrome starts rejecting writes.
+export const STORAGE_WARN_BYTES = 8 * 1024 * 1024;

@@ -1,6 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { APP_NAME, APP_VERSION } from '../shared/constants';
-import { sendToBackground } from '../shared/messaging';
+import {
+  BackgroundError,
+  sendToBackground,
+  type QuotaUsage,
+} from '../shared/messaging';
 import { formatRelativeTime } from '../shared/time';
 import type { Profile, ProfileIndexEntry, SavedTab } from '../shared/types';
 import { tabHasState } from '../shared/validators';
@@ -25,6 +29,20 @@ interface ConfirmState {
   confirmLabel: string;
   destructive: boolean;
   onConfirm: () => Promise<void> | void;
+}
+
+function formatMB(bytes: number): string {
+  return (bytes / (1024 * 1024)).toFixed(1);
+}
+
+function QuotaBanner({ usage }: { usage: QuotaUsage }) {
+  return (
+    <div className="options__quota options__quota--critical" role="status">
+      <strong>Storage full.</strong> Using {formatMB(usage.bytesInUse)} MB of{' '}
+      {formatMB(usage.quotaBytes)} MB. Delete workspaces you no longer need to free
+      space.
+    </div>
+  );
 }
 
 function hostOf(url: string): string {
@@ -55,6 +73,10 @@ export function App() {
   const [previewLoading, setPreviewLoading] = useState<Set<string>>(new Set());
   const [previewError, setPreviewError] = useState<Map<string, string>>(new Map());
   const [busyIds, setBusyIds] = useState<Set<string>>(new Set());
+  // Only set when a write is actually rejected by Chrome; cleared as soon
+  // as any subsequent write (delete/rename/remove-tab) succeeds. Keeps the
+  // banner and reality in sync.
+  const [quotaBlocked, setQuotaBlocked] = useState<QuotaUsage | null>(null);
 
   const refresh = useCallback(async () => {
     try {
@@ -63,6 +85,14 @@ export function App() {
       setProfiles(list);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
+
+  const readQuota = useCallback(async (): Promise<QuotaUsage | null> => {
+    try {
+      return await sendToBackground({ type: 'GET_QUOTA_USAGE' });
+    } catch {
+      return null;
     }
   }, []);
 
@@ -144,17 +174,26 @@ export function App() {
         await sendToBackground({ type: 'RENAME_PROFILE', id, newName });
         setRenamingId(null);
         setToast({ kind: 'success', message: `Renamed to "${newName}".` });
+        setQuotaBlocked(null);
         await refresh();
       } catch (err) {
-        setToast({
-          kind: 'error',
-          message: err instanceof Error ? err.message : String(err),
-        });
+        if (err instanceof BackgroundError && err.code === 'quota_exceeded') {
+          setQuotaBlocked(await readQuota());
+          setToast({
+            kind: 'error',
+            message: 'Storage is full — delete a workspace before renaming.',
+          });
+        } else {
+          setToast({
+            kind: 'error',
+            message: err instanceof Error ? err.message : String(err),
+          });
+        }
       } finally {
         markBusy(id, false);
       }
     },
-    [markBusy, refresh],
+    [markBusy, readQuota, refresh],
   );
 
   const handleDelete = useCallback(
@@ -169,6 +208,8 @@ export function App() {
           try {
             await sendToBackground({ type: 'DELETE_PROFILE', id: entry.id });
             setToast({ kind: 'success', message: `Deleted "${entry.name}".` });
+            // A delete frees storage, so if we were blocked, we no longer are.
+            setQuotaBlocked(null);
             // Drop the row's local state so it doesn't linger in the maps.
             setExpandedIds((prev) => {
               const next = new Set(prev);
@@ -225,21 +266,30 @@ export function App() {
               return;
             }
             setToast({ kind: 'success', message: 'Tab removed.' });
+            setQuotaBlocked(null);
             await refresh();
             // Re-fetch the preview so the tab list drops the removed row.
             await loadPreview({ ...entry, updatedAt: Date.now() }, true);
           } catch (err) {
-            setToast({
-              kind: 'error',
-              message: err instanceof Error ? err.message : String(err),
-            });
+            if (err instanceof BackgroundError && err.code === 'quota_exceeded') {
+              setQuotaBlocked(await readQuota());
+              setToast({
+                kind: 'error',
+                message: 'Storage is full — delete a workspace to free space first.',
+              });
+            } else {
+              setToast({
+                kind: 'error',
+                message: err instanceof Error ? err.message : String(err),
+              });
+            }
           } finally {
             markBusy(entry.id, false);
           }
         },
       });
     },
-    [loadPreview, markBusy, refresh],
+    [loadPreview, markBusy, readQuota, refresh],
   );
 
   return (
@@ -253,6 +303,7 @@ export function App() {
       </header>
 
       {error && <p className="options__error">{error}</p>}
+      {quotaBlocked && <QuotaBanner usage={quotaBlocked} />}
       {toast && (
         <div className={`options__toast options__toast--${toast.kind}`}>
           {toast.message}

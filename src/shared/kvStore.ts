@@ -8,6 +8,9 @@ export interface KVStore {
   // Returns all keys currently in the store. Used to scan for orphaned
   // `profile:*` blobs during recovery/cleanup.
   keys(): Promise<string[]>;
+  // Bytes currently held by the store. Used by the quota guardrail so the
+  // UI can warn before Chrome starts rejecting writes with QUOTA_BYTES.
+  getBytesInUse(): Promise<number>;
 }
 
 // Production adapter — thin wrapper over chrome.storage.local.
@@ -31,6 +34,11 @@ export class ChromeKVStore implements KVStore {
   async keys(): Promise<string[]> {
     const all = await chrome.storage.local.get(null);
     return Object.keys(all);
+  }
+
+  async getBytesInUse(): Promise<number> {
+    // Passing null asks Chrome for total bytes across all keys.
+    return chrome.storage.local.getBytesInUse(null);
   }
 }
 
@@ -56,9 +64,25 @@ export class MemoryKVStore implements KVStore {
     return Array.from(this.data.keys());
   }
 
+  async getBytesInUse(): Promise<number> {
+    // Mirror chrome.storage.local's accounting: sum of key + JSON-encoded
+    // value bytes. Close enough for testing the guardrail without pulling
+    // in a real Chrome runtime.
+    let total = 0;
+    for (const [key, value] of this.data) {
+      total += byteLength(key) + byteLength(value);
+    }
+    return total;
+  }
+
   // Test-only escape hatch: seed corrupted values directly (bypasses JSON
   // guarantees) to exercise quarantine paths.
   _setRaw(key: string, rawJson: string): void {
     this.data.set(key, rawJson);
   }
+}
+
+function byteLength(s: string): number {
+  // TextEncoder is available in both jsdom and Node; avoids Blob allocations.
+  return new TextEncoder().encode(s).length;
 }

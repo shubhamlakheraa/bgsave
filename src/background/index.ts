@@ -34,6 +34,7 @@ const handle = makeMessageHandler({
   frames: makeChromeFramesEnumerator(),
   now: () => Date.now(),
   newId: () => crypto.randomUUID(),
+  bytesInUse: () => kv.getBytesInUse(),
 });
 
 // Concrete chrome.contextMenus adapter. Kept here (not in contextMenu.ts)

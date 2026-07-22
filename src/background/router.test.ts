@@ -3,7 +3,7 @@ import { makeMessageHandler } from './router';
 import { WriteQueue } from './writeQueue';
 import { ProfileStore } from '../shared/storage';
 import { HighlightStore } from '../shared/highlightStore';
-import { MemoryKVStore } from '../shared/kvStore';
+import { MemoryKVStore, type KVStore } from '../shared/kvStore';
 import { SCHEMA_VERSION } from '../shared/constants';
 import type { Profile } from '../shared/types';
 import type { FramesEnumerator, TabFetcher, TabMessenger } from './freeze';
@@ -50,8 +50,10 @@ const stubFrames: FramesEnumerator = {
   getFrames: async () => [],
 };
 
+let kv: MemoryKVStore;
+
 beforeEach(() => {
-  const kv = new MemoryKVStore();
+  kv = new MemoryKVStore();
   store = new ProfileStore(kv);
   queue = new WriteQueue();
   idCounter = 0;
@@ -66,6 +68,7 @@ beforeEach(() => {
     frames: stubFrames,
     now: () => 1_700_000_000_000,
     newId: () => `id-${++idCounter}`,
+    bytesInUse: () => kv.getBytesInUse(),
   });
 });
 
@@ -207,6 +210,61 @@ describe('router — queue serialization', () => {
       expect(names).toEqual(
         Array.from({ length: 8 }, (_, i) => `Profile-${i}`).sort(),
       );
+    }
+  });
+});
+
+describe('router — quota', () => {
+  it('GET_QUOTA_USAGE returns the current usage snapshot', async () => {
+    const res = await handle({ type: 'GET_QUOTA_USAGE' });
+    expect(res.ok).toBe(true);
+    if (res.ok) {
+      expect(res.data.bytesInUse).toBe(0);
+      expect(res.data.quotaBytes).toBeGreaterThan(res.data.warnBytes);
+      expect(res.data.percent).toBe(0);
+    }
+  });
+
+  it('reflects bytes after a SAVE_PROFILE', async () => {
+    await handle({ type: 'SAVE_PROFILE', profile: buildProfile('a', 'A') });
+    const res = await handle({ type: 'GET_QUOTA_USAGE' });
+    expect(res.ok).toBe(true);
+    if (res.ok) expect(res.data.bytesInUse).toBeGreaterThan(0);
+  });
+
+  it('maps QuotaExceededError to code=quota_exceeded', async () => {
+    // Route SAVE_PROFILE through a KVStore whose set() throws Chrome's
+    // native quota error — the router should surface it as a coded envelope.
+    const inner = new MemoryKVStore();
+    const failing: KVStore = {
+      get: <T = unknown>(k: string) => inner.get<T>(k),
+      set: async () => {
+        throw new Error('QUOTA_BYTES quota exceeded');
+      },
+      remove: (k: string) => inner.remove(k),
+      keys: () => inner.keys(),
+      getBytesInUse: () => inner.getBytesInUse(),
+    };
+    const s = new ProfileStore(failing);
+    const q = new WriteQueue();
+    const h = makeMessageHandler({
+      store: s,
+      queue: q,
+      tabs: stubTabFetcher,
+      messenger: stubMessenger,
+      highlights: new HighlightStore(failing),
+      creator: stubCreator,
+      waiter: stubWaiter,
+      frames: stubFrames,
+      now: () => 1_700_000_000_000,
+      newId: () => 'id-x',
+      bytesInUse: () => failing.getBytesInUse(),
+    });
+    const res = await h({ type: 'SAVE_PROFILE', profile: buildProfile('a', 'A') });
+    expect(res.ok).toBe(false);
+    if (!res.ok) {
+      expect(res.code).toBe('quota_exceeded');
+      expect(res.error).toMatch(/quota/i);
     }
   });
 });
