@@ -15,5 +15,13 @@ export default defineConfig({
   build: {
     outDir: 'dist',
     emptyOutDir: true,
+    rollupOptions: {
+      // welcome.html isn't referenced from the manifest, but the background
+      // opens it via chrome.tabs.create on first install — tell Rollup to
+      // emit it so the URL actually resolves in the packaged extension.
+      input: {
+        welcome: 'welcome.html',
+      },
+    },
   },
 });

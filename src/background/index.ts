@@ -78,6 +78,14 @@ async function flashBadge(text: string, color: string) {
 chrome.runtime.onInstalled.addListener((details) => {
   console.log(`[${APP_NAME}] background alive — v${APP_VERSION} — reason: ${details.reason}`);
   void refreshMenu();
+  // Only true installs get the welcome tab. Extension updates and Chrome
+  // updates fire this same event with different reasons — opening a tab
+  // on every update would be spammy.
+  if (details.reason === 'install') {
+    chrome.tabs
+      .create({ url: chrome.runtime.getURL('welcome.html') })
+      .catch(() => {});
+  }
 });
 
 chrome.runtime.onStartup.addListener(() => {
