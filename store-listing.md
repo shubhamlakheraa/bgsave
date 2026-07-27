@@ -106,4 +106,3 @@ For the dev console form. One paragraph per permission.
 - **Homepage URL**: https://github.com/shubhamlakheraa/bgsave
 - **Support URL**: https://github.com/shubhamlakheraa/bgsave/issues
 - **Privacy policy URL**: https://github.com/shubhamlakheraa/bgsave/blob/main/PRIVACY.md
-  *(Or GitHub Pages: `https://<your-github-username>.github.io/bgsave/PRIVACY.html`)*
