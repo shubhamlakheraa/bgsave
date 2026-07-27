@@ -1,11 +1,23 @@
 {
   "manifest_version": 3,
   "name": "bgsave",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Freeze and restore developer workspaces — tabs, scroll positions, highlights.",
   "action": {
     "default_popup": "index.html",
-    "default_title": "bgsave"
+    "default_title": "bgsave",
+    "default_icon": {
+      "16": "icons/16.png",
+      "32": "icons/32.png",
+      "48": "icons/48.png",
+      "128": "icons/128.png"
+    }
+  },
+  "icons": {
+    "16": "icons/16.png",
+    "32": "icons/32.png",
+    "48": "icons/48.png",
+    "128": "icons/128.png"
   },
   "options_page": "options.html",
   "background": {
@@ -29,7 +41,6 @@
     "activeTab",
     "contextMenus",
     "windows",
-    "alarms",
     "webNavigation"
   ],
   "host_permissions": ["<all_urls>"]
