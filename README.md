@@ -4,13 +4,15 @@
 
 Built for developers who juggle "the auth investigation," "the Redis latency thing," and "the design review" as three separate workspaces they want to swap between without losing their place.
 
-<!-- Add screenshot / GIF here once available -->
+![41 tabs open. You can't close a single one. — bgsave freezes the whole window into a named workspace and reopens it later exactly as you left it.](docs/images/poster1.png)
 
 ---
 
 ## Why bgsave
 
 Chrome's built-in "recently closed" and every session-saver extension I tried gave me back the URLs, but never the *state* — the scroll position halfway down the long RFC, the anchor text I'd selected in the docs, the highlight I'd made across three tabs. bgsave restores that too.
+
+![One window per train of thought — the workspaces list showing Apartment hunt, Lisbon trip, and Leetcode with Restore buttons, plus right-click Add to workspace.](docs/images/poster4.png)
 
 **Non-goals** (on purpose):
 
@@ -23,15 +25,23 @@ Chrome's built-in "recently closed" and every session-saver extension I tried ga
 ## What it does
 
 - **Freeze** the current window as a named workspace — captures every tab's URL, title, scroll position, selected/anchor text, and any highlights you've made
+
+![Name it. Close it guilt-free. — the freeze form asking for a workspace name with a checklist of the tabs to include.](docs/images/poster2.png)
+
 - **Restore** a workspace into a new window with the tabs in their original order, pinned states preserved, and per-tab state re-applied
 - **Append** any tab into an existing workspace via right-click → *Add to workspace*
 - **Manage** workspaces — rename, delete, or remove individual tabs — from the options page
 - **Highlights** — select text on any page and save it as a colored highlight; it's re-applied when you restore that tab
+
+![Back to the exact same line — a restored RFC page showing the previous scroll position marker, a saved text selection, and a persisted highlight.](docs/images/poster3.png)
+
 - **Quota-aware** — Chrome's 10 MB storage cap is respected; you'll see a clear message before any silent data loss
 
 ---
 
 ## Privacy
+
+![No account. No sync. No one watching your tabs. — every workspace lives in your browser's own local storage: local-only, zero telemetry, MIT licensed.](docs/images/poster5.png)
 
 - All data lives in `chrome.storage.local` on your machine. It never leaves your device.
 - No servers, no accounts, no third-party requests.
